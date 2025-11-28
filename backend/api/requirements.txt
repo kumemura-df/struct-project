@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+google-cloud-storage
+google-cloud-bigquery
+google-cloud-pubsub
+google-cloud-aiplatform
+python-multipart
+pydantic
+python-jose[cryptography]
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
+dateparser
+python-dateutil
+pytest
+httpx
