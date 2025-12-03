@@ -26,13 +26,18 @@ DEV_LOGIN_ENABLED = os.getenv("DEV_LOGIN_ENABLED", "").lower() == "true" or ENVI
 
 
 def _get_secure_cookie_settings(request: Request) -> dict:
-    """Get secure cookie settings based on request context."""
+    """Get secure cookie settings based on request context.
+    
+    Note: We use samesite="none" because API and Frontend are on different
+    subdomains (project-progress-api-prod-... vs project-progress-frontend-prod-...).
+    This requires secure=True (HTTPS only).
+    """
     is_secure = request.url.scheme == "https" or "run.app" in str(request.url.netloc)
     
     return {
         "httponly": True,
         "secure": is_secure,
-        "samesite": "lax",
+        "samesite": "none" if is_secure else "lax",  # Cross-site cookies require secure
         "max_age": 60 * 60 * 24,  # 24 hours
         "path": "/",
     }
