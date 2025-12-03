@@ -514,3 +514,34 @@ export async function getAuditActions(): Promise<{
   const res = await authenticatedFetch(`${API_URL}/audit/actions`);
   return res.json();
 }
+
+// Email report endpoints
+export interface WeeklyReportSummary {
+  overdue_tasks_count: number;
+  high_risks_count: number;
+  projects_analyzed: number;
+}
+
+export interface WeeklyReportText {
+  subject: string;
+  body: string;
+  summary: WeeklyReportSummary;
+  generated_at: string;
+}
+
+export interface WeeklyReportHtml {
+  subject: string;
+  body_html: string;
+  summary: WeeklyReportSummary;
+  generated_at: string;
+}
+
+export async function generateWeeklyReportText(includeHealth: boolean = true): Promise<WeeklyReportText> {
+  const res = await authenticatedFetch(`${API_URL}/email/weekly-report?include_health=${includeHealth}`);
+  return res.json();
+}
+
+export async function generateWeeklyReportHtml(includeHealth: boolean = true): Promise<WeeklyReportHtml> {
+  const res = await authenticatedFetch(`${API_URL}/email/weekly-report/html?include_health=${includeHealth}`);
+  return res.json();
+}

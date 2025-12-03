@@ -45,6 +45,12 @@ export default function Dashboard() {
                         Health
                     </button>
                     <Link
+                        href="/report"
+                        className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold transition-colors shadow-lg shadow-amber-500/30"
+                    >
+                        Report
+                    </Link>
+                    <Link
                         href="/agenda"
                         className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition-colors shadow-lg shadow-indigo-500/30"
                     >
