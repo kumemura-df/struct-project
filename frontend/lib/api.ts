@@ -261,3 +261,65 @@ export async function getRisksDifference(
   const res = await authenticatedFetch(url);
   return res.json();
 }
+
+// Settings endpoints
+export interface SlackSettings {
+  webhook_url: string;
+  webhook_url_masked?: string;
+  notify_on_high_risk: boolean;
+  notify_on_overdue: boolean;
+  notify_on_meeting_processed: boolean;
+}
+
+export async function getSlackSettings(): Promise<SlackSettings> {
+  const res = await authenticatedFetch(`${API_URL}/settings/slack`);
+  return res.json();
+}
+
+export async function updateSlackSettings(settings: {
+  webhook_url: string;
+  notify_on_high_risk?: boolean;
+  notify_on_overdue?: boolean;
+  notify_on_meeting_processed?: boolean;
+}): Promise<{ message: string }> {
+  const res = await authenticatedFetch(`${API_URL}/settings/slack`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  return res.json();
+}
+
+export async function deleteSlackSettings(): Promise<{ message: string }> {
+  const res = await authenticatedFetch(`${API_URL}/settings/slack`, {
+    method: 'DELETE',
+  });
+  return res.json();
+}
+
+export async function testSlackNotification(
+  webhookUrl?: string,
+  message?: string
+): Promise<{ message: string }> {
+  const res = await authenticatedFetch(`${API_URL}/settings/slack/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      webhook_url: webhookUrl,
+      message: message || 'Test notification from Project Progress DB',
+    }),
+  });
+  return res.json();
+}
+
+export async function sendImmediateNotifications(): Promise<{
+  high_risks_notified: boolean;
+  overdue_tasks_notified: boolean;
+  high_risks_count: number;
+  overdue_tasks_count: number;
+}> {
+  const res = await authenticatedFetch(`${API_URL}/settings/slack/notify-now`, {
+    method: 'POST',
+  });
+  return res.json();
+}

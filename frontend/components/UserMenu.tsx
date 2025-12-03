@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { getAuthState, logout, type User } from '../lib/auth';
 
 export default function UserMenu() {
@@ -48,6 +49,13 @@ export default function UserMenu() {
                         onClick={() => setShowMenu(false)}
                     />
                     <div className="absolute right-0 mt-2 w-48 glass rounded-lg shadow-lg z-20 p-2">
+                        <Link
+                            href="/settings"
+                            onClick={() => setShowMenu(false)}
+                            className="block w-full text-left px-4 py-2 rounded-lg text-white hover:bg-white/10 transition-colors"
+                        >
+                            Settings
+                        </Link>
                         <button
                             onClick={() => {
                                 setShowMenu(false);
@@ -55,7 +63,7 @@ export default function UserMenu() {
                             }}
                             className="w-full text-left px-4 py-2 rounded-lg text-white hover:bg-white/10 transition-colors"
                         >
-                            ログアウト
+                            Logout
                         </button>
                     </div>
                 </>

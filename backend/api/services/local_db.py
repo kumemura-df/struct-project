@@ -96,7 +96,16 @@ def _create_tables(conn: sqlite3.Connection):
             source_sentence TEXT
         )
     """)
-    
+
+    # Settings table (for Slack webhook, etc.)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at TEXT
+        )
+    """)
+
     conn.commit()
 
 def insert_meeting_metadata(meeting_data: Dict[str, Any]):
@@ -463,8 +472,83 @@ def save_extracted_data(meeting_id: str, extracted_data: dict):
     
     conn.commit()
     conn.close()
-    
+
     print(f"Successfully saved: {len(extracted_data.get('projects', []))} projects, "
           f"{len(extracted_data.get('tasks', []))} tasks, "
           f"{len(extracted_data.get('risks', []))} risks, "
           f"{len(extracted_data.get('decisions', []))} decisions")
+
+
+# Settings functions
+def get_setting(key: str) -> Optional[str]:
+    """Get a setting value by key."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = cursor.fetchone()
+    conn.close()
+    return row["value"] if row else None
+
+
+def set_setting(key: str, value: str) -> None:
+    """Set a setting value."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+    """, (key, value, datetime.utcnow().isoformat()))
+    conn.commit()
+    conn.close()
+
+
+def get_all_settings() -> Dict[str, str]:
+    """Get all settings as a dictionary."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT key, value FROM settings")
+    rows = cursor.fetchall()
+    conn.close()
+    return {row["key"]: row["value"] for row in rows}
+
+
+def delete_setting(key: str) -> None:
+    """Delete a setting."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM settings WHERE key = ?", (key,))
+    conn.commit()
+    conn.close()
+
+
+def get_overdue_tasks() -> List[Dict[str, Any]]:
+    """Get tasks that are past their due date."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT t.*, p.project_name
+        FROM tasks t
+        LEFT JOIN projects p ON t.project_id = p.project_id
+        WHERE t.due_date < date('now')
+          AND t.status != 'DONE'
+        ORDER BY t.due_date ASC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_high_risks() -> List[Dict[str, Any]]:
+    """Get all HIGH level risks."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT r.*, p.project_name
+        FROM risks r
+        LEFT JOIN projects p ON r.project_id = p.project_id
+        WHERE r.risk_level = 'HIGH'
+        ORDER BY r.created_at DESC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]

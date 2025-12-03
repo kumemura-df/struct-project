@@ -4,7 +4,7 @@ import base64
 import json
 from flask import Flask, request, jsonify
 from google.cloud import storage
-from services import gemini, bigquery
+from services import gemini, bigquery, slack
 
 app = Flask(__name__)
 
@@ -84,16 +84,56 @@ def process_upload(meeting_id: str, gcs_uri: str):
         print(f"Extracted data: {json.dumps(extracted_data, default=str)[:500]}...")
         
         # 4. Save to BigQuery
-        bigquery.save_extracted_data(meeting_id, extracted_data)
-        
+        stats = bigquery.save_extracted_data(meeting_id, extracted_data)
+
         # 5. Update status
         bigquery.update_meeting_status(meeting_id, "DONE")
         print(f"Successfully processed meeting {meeting_id}")
+
+        # 6. Send Slack notifications if configured
+        send_notifications(meeting_meta, stats, extracted_data)
         
     except Exception as e:
         print(f"Error processing upload: {e}")
         bigquery.update_meeting_status(meeting_id, "ERROR", str(e))
         raise e
+
+
+def send_notifications(meeting_meta: dict, stats: dict, extracted_data: dict):
+    """Send Slack notifications after processing."""
+    try:
+        webhook_url = bigquery.get_setting("slack_webhook_url")
+        if not webhook_url:
+            print("Slack webhook not configured, skipping notifications")
+            return
+
+        # Check if meeting notification is enabled
+        notify_meeting = bigquery.get_setting("slack_notify_meeting") != "false"
+        notify_high_risk = bigquery.get_setting("slack_notify_high_risk") != "false"
+
+        # Notify meeting processed
+        if notify_meeting:
+            slack.notify_meeting_processed(
+                meeting_title=meeting_meta.get("title", "Untitled Meeting"),
+                meeting_date=str(meeting_meta.get("meeting_date", "")),
+                stats=stats,
+                webhook_url=webhook_url
+            )
+            print("Sent meeting processed notification")
+
+        # Notify HIGH risks if any
+        if notify_high_risk:
+            high_risks = [
+                r for r in extracted_data.get("risks", [])
+                if r.get("risk_level") == "HIGH"
+            ]
+            if high_risks:
+                slack.notify_high_risks(high_risks, webhook_url)
+                print(f"Sent high risk notification for {len(high_risks)} risks")
+
+    except Exception as e:
+        print(f"Error sending notifications: {e}")
+        # Don't fail the entire process for notification errors
 
 
 @app.route("/health", methods=["GET"])

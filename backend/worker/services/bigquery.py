@@ -172,3 +172,42 @@ def save_extracted_data(meeting_id: str, extracted_data: dict):
     
     print(f"Successfully saved: {len(projects_rows)} projects, {len(tasks_rows)} tasks, "
           f"{len(risks_rows)} risks, {len(decisions_rows)} decisions")
+
+    # Return stats for notification
+    return {
+        "projects_count": len(projects_rows),
+        "tasks_count": len(tasks_rows),
+        "risks_count": len(risks_rows),
+        "decisions_count": len(decisions_rows)
+    }
+
+
+def get_setting(key: str) -> Optional[str]:
+    """Get a setting value from BigQuery settings table."""
+    client = get_client()
+    query = f"""
+        SELECT value FROM `{PROJECT_ID}.{DATASET_ID}.settings`
+        WHERE key = @key
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("key", "STRING", key)
+        ]
+    )
+    results = list(client.query(query, job_config=job_config))
+    if results:
+        return results[0].value
+    return None
+
+
+def get_high_risks() -> List[Dict[str, Any]]:
+    """Get all HIGH level risks."""
+    client = get_client()
+    query = f"""
+        SELECT r.*, p.project_name
+        FROM `{PROJECT_ID}.{DATASET_ID}.risks` r
+        LEFT JOIN `{PROJECT_ID}.{DATASET_ID}.projects` p ON r.project_id = p.project_id
+        WHERE r.risk_level = 'HIGH'
+        ORDER BY r.created_at DESC
+    """
+    return [dict(row) for row in client.query(query)]
