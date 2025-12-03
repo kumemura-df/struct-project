@@ -19,16 +19,22 @@ export default function Dashboard() {
                 </h1>
                 <div className="flex items-center space-x-4">
                     <Link
+                        href="/difference"
+                        className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-semibold transition-colors shadow-lg shadow-purple-500/30"
+                    >
+                        Diff
+                    </Link>
+                    <Link
                         href="/risks"
                         className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold transition-colors shadow-lg shadow-red-500/30"
                     >
-                        🔴 リスクダッシュボード
+                        Risks
                     </Link>
                     <Link
                         href="/upload"
                         className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-colors shadow-lg shadow-blue-500/30"
                     >
-                        📤 議事録アップロード
+                        Upload
                     </Link>
                     <UserMenu />
                 </div>

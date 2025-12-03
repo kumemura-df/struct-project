@@ -207,6 +207,76 @@ def list_decisions(
     conn.close()
     return [dict(row) for row in rows]
 
+def list_meetings(project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List meetings, optionally filtered by project_id."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    if project_id:
+        # Get meetings that have tasks/risks for this project
+        cursor.execute("""
+            SELECT DISTINCT m.* FROM meetings m
+            LEFT JOIN tasks t ON m.meeting_id = t.meeting_id
+            LEFT JOIN risks r ON m.meeting_id = r.meeting_id
+            WHERE t.project_id = ? OR r.project_id = ?
+            ORDER BY m.meeting_date DESC
+        """, (project_id, project_id))
+    else:
+        cursor.execute("SELECT * FROM meetings ORDER BY meeting_date DESC")
+
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def list_tasks_by_meeting(
+    meeting_id: str,
+    project_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """List tasks for a specific meeting."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    if project_id:
+        cursor.execute(
+            "SELECT * FROM tasks WHERE meeting_id = ? AND project_id = ? ORDER BY due_date ASC",
+            (meeting_id, project_id)
+        )
+    else:
+        cursor.execute(
+            "SELECT * FROM tasks WHERE meeting_id = ? ORDER BY due_date ASC",
+            (meeting_id,)
+        )
+
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def list_risks_by_meeting(
+    meeting_id: str,
+    project_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """List risks for a specific meeting."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    if project_id:
+        cursor.execute(
+            "SELECT * FROM risks WHERE meeting_id = ? AND project_id = ? ORDER BY created_at DESC",
+            (meeting_id, project_id)
+        )
+    else:
+        cursor.execute(
+            "SELECT * FROM risks WHERE meeting_id = ? ORDER BY created_at DESC",
+            (meeting_id,)
+        )
+
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
 def get_risk_stats() -> Dict[str, Any]:
     """Get risk statistics."""
     conn = _get_connection()

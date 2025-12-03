@@ -12,7 +12,7 @@
 *   **Project Estimation & Linking**: Auto-classify multiple projects within a meeting.
 *   **Risk / Decision Extraction**: Extract risks (description, level, owner) and decisions.
 *   **"Risk-like" Utterance Extraction**: Link original utterances to extracted risks.
-*   **[Future] Inter-meeting Diff Detection**: Detect new tasks, status changes, and escalated risks since the last meeting.
+*   **Inter-meeting Diff Detection**: Detect new tasks, status changes, and escalated risks since the last meeting. *(Implemented)*
 
 ### View / Dashboard Features
 *   **Project List**: View projects with uncompleted tasks, delayed tasks, risk counts, and last updated dates.

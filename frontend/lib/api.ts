@@ -168,3 +168,96 @@ export async function exportDecisions(filters?: {
   await downloadBlob(blob, filename);
   toast.success('Decisions exported successfully');
 }
+
+// Meeting endpoints
+export async function getMeetings(projectId?: string) {
+  const params = new URLSearchParams();
+  if (projectId) params.append('project_id', projectId);
+
+  const url = `${API_URL}/meetings/?${params.toString()}`;
+  const res = await authenticatedFetch(url);
+  return res.json();
+}
+
+// Difference detection endpoints
+export interface TaskDiffResult {
+  added: Array<Record<string, unknown>>;
+  removed: Array<Record<string, unknown>>;
+  status_changed: Array<{
+    task: Record<string, unknown>;
+    prev_status: string;
+    curr_status: string;
+  }>;
+  priority_changed: Array<{
+    task: Record<string, unknown>;
+    prev_priority: string;
+    curr_priority: string;
+  }>;
+  unchanged: Array<Record<string, unknown>>;
+  summary: {
+    added_count: number;
+    removed_count: number;
+    status_changed_count: number;
+    priority_changed_count: number;
+    unchanged_count: number;
+    total_changes: number;
+  };
+}
+
+export interface RiskDiffResult {
+  added: Array<Record<string, unknown>>;
+  removed: Array<Record<string, unknown>>;
+  level_changed: Array<{
+    risk: Record<string, unknown>;
+    prev_level: string;
+    curr_level: string;
+  }>;
+  unchanged: Array<Record<string, unknown>>;
+  escalated: Array<{
+    risk: Record<string, unknown>;
+    prev_level: string;
+    curr_level: string;
+  }>;
+  de_escalated: Array<{
+    risk: Record<string, unknown>;
+    prev_level: string;
+    curr_level: string;
+  }>;
+  summary: {
+    added_count: number;
+    removed_count: number;
+    level_changed_count: number;
+    unchanged_count: number;
+    total_changes: number;
+  };
+}
+
+export async function getTasksDifference(
+  prevMeetingId: string,
+  currMeetingId: string,
+  projectId?: string
+): Promise<TaskDiffResult> {
+  const params = new URLSearchParams();
+  params.append('prev_meeting_id', prevMeetingId);
+  params.append('curr_meeting_id', currMeetingId);
+  if (projectId) params.append('project_id', projectId);
+
+  const url = `${API_URL}/tasks/difference?${params.toString()}`;
+  const res = await authenticatedFetch(url);
+  return res.json();
+}
+
+export async function getRisksDifference(
+  prevMeetingId: string,
+  currMeetingId: string,
+  projectId?: string
+): Promise<RiskDiffResult> {
+  const params = new URLSearchParams();
+  params.append('prev_meeting_id', prevMeetingId);
+  params.append('curr_meeting_id', currMeetingId);
+  if (projectId) params.append('project_id', projectId);
+
+  const url = `${API_URL}/risks/difference?${params.toString()}`;
+  const res = await authenticatedFetch(url);
+  return res.json();
+}

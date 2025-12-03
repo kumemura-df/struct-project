@@ -145,6 +145,200 @@ def list_decisions(
     
     return [dict(row) for row in query_job]
 
+def list_meetings(project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List meetings, optionally filtered by project_id."""
+    if USE_LOCAL_DB:
+        return local_db.list_meetings(project_id)
+
+    client = get_client()
+
+    if project_id:
+        query = f"""
+            SELECT DISTINCT m.*
+            FROM `{PROJECT_ID}.{DATASET_ID}.meetings` m
+            LEFT JOIN `{PROJECT_ID}.{DATASET_ID}.tasks` t ON m.meeting_id = t.meeting_id
+            LEFT JOIN `{PROJECT_ID}.{DATASET_ID}.risks` r ON m.meeting_id = r.meeting_id
+            WHERE t.project_id = @project_id OR r.project_id = @project_id
+            ORDER BY m.meeting_date DESC
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("project_id", "STRING", project_id)
+            ]
+        )
+        query_job = client.query(query, job_config=job_config)
+    else:
+        query = f"""
+            SELECT * FROM `{PROJECT_ID}.{DATASET_ID}.meetings`
+            ORDER BY meeting_date DESC
+        """
+        query_job = client.query(query)
+
+    return [dict(row) for row in query_job]
+
+
+def list_tasks_by_meeting(
+    meeting_id: str,
+    project_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """List tasks for a specific meeting."""
+    if USE_LOCAL_DB:
+        return local_db.list_tasks_by_meeting(meeting_id, project_id)
+
+    client = get_client()
+
+    where_clauses = ["meeting_id = @meeting_id"]
+    query_params = [bigquery.ScalarQueryParameter("meeting_id", "STRING", meeting_id)]
+
+    if project_id:
+        where_clauses.append("project_id = @project_id")
+        query_params.append(bigquery.ScalarQueryParameter("project_id", "STRING", project_id))
+
+    query = f"""
+        SELECT * FROM `{PROJECT_ID}.{DATASET_ID}.tasks`
+        WHERE {' AND '.join(where_clauses)}
+        ORDER BY due_date ASC
+    """
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+    query_job = client.query(query, job_config=job_config)
+
+    return [dict(row) for row in query_job]
+
+
+def list_risks_by_meeting(
+    meeting_id: str,
+    project_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """List risks for a specific meeting."""
+    if USE_LOCAL_DB:
+        return local_db.list_risks_by_meeting(meeting_id, project_id)
+
+    client = get_client()
+
+    where_clauses = ["meeting_id = @meeting_id"]
+    query_params = [bigquery.ScalarQueryParameter("meeting_id", "STRING", meeting_id)]
+
+    if project_id:
+        where_clauses.append("project_id = @project_id")
+        query_params.append(bigquery.ScalarQueryParameter("project_id", "STRING", project_id))
+
+    query = f"""
+        SELECT * FROM `{PROJECT_ID}.{DATASET_ID}.risks`
+        WHERE {' AND '.join(where_clauses)}
+        ORDER BY created_at DESC
+    """
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+    query_job = client.query(query, job_config=job_config)
+
+    return [dict(row) for row in query_job]
+
+
+def compare_tasks(
+    prev_tasks: List[Dict[str, Any]],
+    curr_tasks: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Compare tasks between two meetings and detect differences."""
+    diff = {
+        "added": [],
+        "removed": [],
+        "status_changed": [],
+        "priority_changed": [],
+        "unchanged": []
+    }
+
+    # Create maps using task_title + owner as key
+    def make_key(task):
+        return (task.get("task_title", "").lower(), task.get("owner", ""))
+
+    prev_map = {make_key(t): t for t in prev_tasks}
+    curr_map = {make_key(t): t for t in curr_tasks}
+
+    # Detect added tasks
+    for key, task in curr_map.items():
+        if key not in prev_map:
+            diff["added"].append(task)
+
+    # Detect removed tasks
+    for key, task in prev_map.items():
+        if key not in curr_map:
+            diff["removed"].append(task)
+
+    # Detect changed tasks
+    for key in prev_map:
+        if key in curr_map:
+            prev_task = prev_map[key]
+            curr_task = curr_map[key]
+
+            status_changed = prev_task.get("status") != curr_task.get("status")
+            priority_changed = prev_task.get("priority") != curr_task.get("priority")
+
+            if status_changed:
+                diff["status_changed"].append({
+                    "task": curr_task,
+                    "prev_status": prev_task.get("status"),
+                    "curr_status": curr_task.get("status")
+                })
+            elif priority_changed:
+                diff["priority_changed"].append({
+                    "task": curr_task,
+                    "prev_priority": prev_task.get("priority"),
+                    "curr_priority": curr_task.get("priority")
+                })
+            else:
+                diff["unchanged"].append(curr_task)
+
+    return diff
+
+
+def compare_risks(
+    prev_risks: List[Dict[str, Any]],
+    curr_risks: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Compare risks between two meetings and detect differences."""
+    diff = {
+        "added": [],
+        "removed": [],
+        "level_changed": [],
+        "unchanged": []
+    }
+
+    # Create maps using risk_description + owner as key
+    def make_key(risk):
+        return (risk.get("risk_description", "").lower()[:100], risk.get("owner", ""))
+
+    prev_map = {make_key(r): r for r in prev_risks}
+    curr_map = {make_key(r): r for r in curr_risks}
+
+    # Detect added risks
+    for key, risk in curr_map.items():
+        if key not in prev_map:
+            diff["added"].append(risk)
+
+    # Detect removed risks
+    for key, risk in prev_map.items():
+        if key not in curr_map:
+            diff["removed"].append(risk)
+
+    # Detect changed risks
+    for key in prev_map:
+        if key in curr_map:
+            prev_risk = prev_map[key]
+            curr_risk = curr_map[key]
+
+            level_changed = prev_risk.get("risk_level") != curr_risk.get("risk_level")
+
+            if level_changed:
+                diff["level_changed"].append({
+                    "risk": curr_risk,
+                    "prev_level": prev_risk.get("risk_level"),
+                    "curr_level": curr_risk.get("risk_level")
+                })
+            else:
+                diff["unchanged"].append(curr_risk)
+
+    return diff
+
+
 def get_risk_stats() -> Dict[str, Any]:
     """Get risk statistics (count by level, by project)."""
     if USE_LOCAL_DB:
