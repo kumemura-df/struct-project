@@ -359,3 +359,34 @@ export async function getProjectHealthScore(projectId: string): Promise<ProjectH
   const res = await authenticatedFetch(`${API_URL}/projects/${projectId}/health`);
   return res.json();
 }
+
+// Agenda generation endpoints
+export interface AgendaItem {
+  title: string;
+  description: string;
+  priority: 'HIGH' | 'MEDIUM' | 'LOW';
+  estimated_minutes: number;
+  related_tasks?: string[];
+  related_risks?: string[];
+}
+
+export interface GeneratedAgenda {
+  agenda_items: AgendaItem[];
+  suggested_duration_minutes: number;
+  key_discussion_points: (string | null)[];
+  recommended_attendees?: string[];
+  generated_at: string;
+  project_name: string;
+  ai_generated?: boolean;
+  projects_count?: number;
+}
+
+export async function generateProjectAgenda(projectId: string): Promise<GeneratedAgenda> {
+  const res = await authenticatedFetch(`${API_URL}/agenda/generate?project_id=${projectId}`);
+  return res.json();
+}
+
+export async function generatePortfolioAgenda(): Promise<GeneratedAgenda> {
+  const res = await authenticatedFetch(`${API_URL}/agenda/generate/all`);
+  return res.json();
+}

@@ -192,23 +192,232 @@ def process_meeting_notes(
 ) -> Dict[str, Any]:
     """
     Process meeting notes: extract info and return structured data.
-    
+
     Args:
         meeting_id: Meeting ID
         text_content: Full text content of meeting notes
         meeting_date: Meeting date in ISO format "YYYY-MM-DD"
-    
+
     Returns:
         Extracted data dictionary
     """
     print(f"Processing meeting {meeting_id} with Gemini...")
-    
+
     # Extract info using Gemini
     extracted_data = extract_info(text_content, meeting_date)
-    
+
     print(f"Extracted: {len(extracted_data.get('projects', []))} projects, "
           f"{len(extracted_data.get('tasks', []))} tasks, "
           f"{len(extracted_data.get('risks', []))} risks, "
           f"{len(extracted_data.get('decisions', []))} decisions")
-    
+
     return extracted_data
+
+
+def generate_meeting_agenda(
+    project_name: str,
+    tasks: list,
+    risks: list,
+    decisions: list,
+    recent_meetings: list
+) -> Dict[str, Any]:
+    """
+    Generate suggested agenda for the next meeting using AI.
+
+    Args:
+        project_name: Name of the project
+        tasks: List of tasks (including overdue, in-progress)
+        risks: List of active risks
+        decisions: List of recent decisions
+        recent_meetings: List of recent meeting titles and dates
+
+    Returns:
+        Dictionary with agenda items and suggestions
+    """
+    if not VERTEX_AI_AVAILABLE:
+        return _generate_agenda_fallback(project_name, tasks, risks, decisions)
+
+    model = GenerativeModel("gemini-1.5-flash-001")
+
+    # Prepare context
+    overdue_tasks = [t for t in tasks if t.get("due_date") and t["due_date"] < datetime.now().strftime("%Y-%m-%d") and t.get("status") != "DONE"]
+    in_progress_tasks = [t for t in tasks if t.get("status") == "IN_PROGRESS"]
+    high_risks = [r for r in risks if r.get("risk_level") == "HIGH"]
+
+    context = f"""
+Project: {project_name}
+
+Overdue Tasks ({len(overdue_tasks)}):
+{_format_tasks_for_prompt(overdue_tasks)}
+
+In-Progress Tasks ({len(in_progress_tasks)}):
+{_format_tasks_for_prompt(in_progress_tasks)}
+
+High Risks ({len(high_risks)}):
+{_format_risks_for_prompt(high_risks)}
+
+Recent Decisions ({len(decisions)}):
+{_format_decisions_for_prompt(decisions[:5])}
+
+Recent Meetings:
+{_format_meetings_for_prompt(recent_meetings[:3])}
+"""
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "agenda_items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+                        "estimated_minutes": {"type": "integer"},
+                        "related_tasks": {"type": "array", "items": {"type": "string"}},
+                        "related_risks": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "required": ["title", "description", "priority", "estimated_minutes"]
+                }
+            },
+            "suggested_duration_minutes": {"type": "integer"},
+            "key_discussion_points": {"type": "array", "items": {"type": "string"}},
+            "recommended_attendees": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["agenda_items", "suggested_duration_minutes", "key_discussion_points"]
+    }
+
+    prompt = f"""
+You are a Project Management Assistant helping to plan the next meeting.
+
+Based on the project context below, generate a suggested meeting agenda that:
+1. Prioritizes overdue tasks and high risks
+2. Reviews in-progress work status
+3. Follows up on recent decisions
+4. Keeps the meeting focused and time-efficient
+
+{context}
+
+Generate a practical, actionable meeting agenda with estimated time for each item.
+Focus on items that need discussion or decisions, not just status updates.
+"""
+
+    generation_config = {
+        "response_mime_type": "application/json",
+        "response_schema": schema
+    }
+
+    try:
+        response = model.generate_content(
+            prompt,
+            generation_config=generation_config,
+        )
+        result = json.loads(response.text)
+        result["generated_at"] = datetime.now().isoformat()
+        result["project_name"] = project_name
+        return result
+    except Exception as e:
+        print(f"AI agenda generation failed: {e}")
+        return _generate_agenda_fallback(project_name, tasks, risks, decisions)
+
+
+def _generate_agenda_fallback(
+    project_name: str,
+    tasks: list,
+    risks: list,
+    decisions: list
+) -> Dict[str, Any]:
+    """Generate a basic agenda without AI."""
+    agenda_items = []
+
+    # Overdue tasks review
+    overdue = [t for t in tasks if t.get("due_date") and t["due_date"] < datetime.now().strftime("%Y-%m-%d") and t.get("status") != "DONE"]
+    if overdue:
+        agenda_items.append({
+            "title": "Overdue Tasks Review",
+            "description": f"Review {len(overdue)} overdue task(s) and discuss blockers",
+            "priority": "HIGH",
+            "estimated_minutes": min(len(overdue) * 5, 20),
+            "related_tasks": [t.get("task_title", "") for t in overdue[:5]]
+        })
+
+    # High risks
+    high_risks = [r for r in risks if r.get("risk_level") == "HIGH"]
+    if high_risks:
+        agenda_items.append({
+            "title": "High Risk Discussion",
+            "description": f"Address {len(high_risks)} high-level risk(s)",
+            "priority": "HIGH",
+            "estimated_minutes": min(len(high_risks) * 5, 15),
+            "related_risks": [r.get("risk_description", "")[:50] for r in high_risks[:3]]
+        })
+
+    # In-progress tasks
+    in_progress = [t for t in tasks if t.get("status") == "IN_PROGRESS"]
+    if in_progress:
+        agenda_items.append({
+            "title": "Progress Update",
+            "description": f"Status update on {len(in_progress)} in-progress task(s)",
+            "priority": "MEDIUM",
+            "estimated_minutes": min(len(in_progress) * 3, 15),
+            "related_tasks": [t.get("task_title", "") for t in in_progress[:5]]
+        })
+
+    # Next steps
+    agenda_items.append({
+        "title": "Next Steps & Action Items",
+        "description": "Define action items and assignments for the coming week",
+        "priority": "MEDIUM",
+        "estimated_minutes": 10
+    })
+
+    total_minutes = sum(item.get("estimated_minutes", 10) for item in agenda_items)
+
+    return {
+        "agenda_items": agenda_items,
+        "suggested_duration_minutes": total_minutes,
+        "key_discussion_points": [
+            f"{len(overdue)} overdue tasks need attention" if overdue else None,
+            f"{len(high_risks)} high risks require discussion" if high_risks else None,
+        ],
+        "generated_at": datetime.now().isoformat(),
+        "project_name": project_name,
+        "ai_generated": False
+    }
+
+
+def _format_tasks_for_prompt(tasks: list) -> str:
+    if not tasks:
+        return "None"
+    return "\n".join([
+        f"- {t.get('task_title', 'Untitled')} (Owner: {t.get('owner', 'Unknown')}, Due: {t.get('due_date', 'N/A')})"
+        for t in tasks[:10]
+    ])
+
+
+def _format_risks_for_prompt(risks: list) -> str:
+    if not risks:
+        return "None"
+    return "\n".join([
+        f"- [{r.get('risk_level', 'UNKNOWN')}] {r.get('risk_description', 'No description')[:100]}"
+        for r in risks[:5]
+    ])
+
+
+def _format_decisions_for_prompt(decisions: list) -> str:
+    if not decisions:
+        return "None"
+    return "\n".join([
+        f"- {d.get('decision_content', d.get('decision_description', 'No content'))[:100]}"
+        for d in decisions[:5]
+    ])
+
+
+def _format_meetings_for_prompt(meetings: list) -> str:
+    if not meetings:
+        return "None"
+    return "\n".join([
+        f"- {m.get('title', 'Untitled')} ({m.get('meeting_date', 'Unknown date')})"
+        for m in meetings[:3]
+    ])

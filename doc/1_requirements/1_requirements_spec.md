@@ -24,7 +24,7 @@
 *   **CSV / Excel Export**: Export projects, tasks, and risks to CSV/Excel.
 *   **Email Generation**: Auto-generate "Top 10 Delayed/Risk Tasks of the Week" draft emails.
 *   **Slack Notifications**: Alerts for high risks, overdue tasks, and meeting processing completion. *(Implemented)*
-*   **[Future] Next Meeting Agenda Generation**: Auto-generate agenda topics based on history.
+*   **Next Meeting Agenda Generation**: AI-powered agenda generation based on overdue tasks, risks, in-progress work, and recent decisions. *(Implemented)*
 
 ### Management & Settings
 *   **User Management**: Simple Google OAuth login.
