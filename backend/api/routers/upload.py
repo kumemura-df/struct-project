@@ -2,10 +2,11 @@ import os
 import uuid
 import json
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request
 from google.cloud import pubsub_v1
 from services import storage, bigquery
 from auth.middleware import get_current_user
+from routers.audit import log_user_action
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
@@ -15,6 +16,7 @@ USE_LOCAL_MODE = os.getenv("USE_LOCAL_DB", "false").lower() == "true"
 
 @router.post("/")
 async def upload_meeting_notes(
+    request: Request,
     file: UploadFile = File(...),
     meeting_date: str = Form(...), # YYYY-MM-DD
     title: str = Form(None),
@@ -24,9 +26,19 @@ async def upload_meeting_notes(
         content = await file.read()
         meeting_id = str(uuid.uuid4())
         filename = f"{meeting_id}/{file.filename}"
-        
+
         # Upload to GCS
         gcs_uri = storage.upload_file(content, filename, file.content_type)
+
+        # Log audit
+        log_user_action(
+            request=request,
+            action="UPLOAD_MEETING",
+            current_user=current_user,
+            resource_type="meeting",
+            resource_id=meeting_id,
+            details=f"Uploaded file: {file.filename}, date: {meeting_date}"
+        )
         
         # Insert metadata to BigQuery
         meeting_data = {

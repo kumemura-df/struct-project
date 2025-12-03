@@ -1,9 +1,10 @@
 """User management API endpoints."""
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 from services import local_db
 from auth.middleware import get_current_user, require_admin
+from routers.audit import log_user_action
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -62,6 +63,7 @@ def get_user(email: str, current_user: dict = Depends(require_admin)):
 def update_user_role(
     email: str,
     role_update: UserRoleUpdate,
+    request: Request,
     current_user: dict = Depends(require_admin)
 ):
     """Update a user's role (Admin only)."""
@@ -73,9 +75,12 @@ def update_user_role(
                 detail=f"Invalid role. Must be one of: {local_db.VALID_ROLES}"
             )
 
+        # Get target user's current role for logging
+        target_user = local_db.get_user_role(email)
+        old_role = target_user.get("role") if target_user else None
+
         # Prevent demoting the last admin
         if role_update.role != "ADMIN":
-            target_user = local_db.get_user_role(email)
             if target_user and target_user.get("role") == "ADMIN":
                 admin_count = local_db.count_admins()
                 if admin_count <= 1:
@@ -95,6 +100,16 @@ def update_user_role(
         if not updated:
             raise HTTPException(status_code=404, detail="User not found")
 
+        # Log audit
+        log_user_action(
+            request=request,
+            action="UPDATE_USER_ROLE",
+            current_user=current_user,
+            resource_type="user",
+            resource_id=email,
+            details=f"Role changed from {old_role} to {role_update.role}"
+        )
+
         return {"message": f"User {email} role updated to {role_update.role}", "user": updated}
     except HTTPException:
         raise
@@ -105,7 +120,7 @@ def update_user_role(
 
 
 @router.delete("/{email}")
-def delete_user(email: str, current_user: dict = Depends(require_admin)):
+def delete_user(email: str, request: Request, current_user: dict = Depends(require_admin)):
     """Delete a user (Admin only)."""
     try:
         # Prevent self-deletion
@@ -128,6 +143,16 @@ def delete_user(email: str, current_user: dict = Depends(require_admin)):
         deleted = local_db.delete_user(email)
         if not deleted:
             raise HTTPException(status_code=404, detail="User not found")
+
+        # Log audit
+        log_user_action(
+            request=request,
+            action="DELETE_USER",
+            current_user=current_user,
+            resource_type="user",
+            resource_id=email,
+            details=f"User deleted (role: {target_user.get('role') if target_user else 'unknown'})"
+        )
 
         return {"message": f"User {email} deleted successfully"}
     except HTTPException:

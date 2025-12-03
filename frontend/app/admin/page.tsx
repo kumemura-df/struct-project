@@ -123,12 +123,20 @@ export default function AdminPage() {
               Manage user roles and permissions
             </p>
           </div>
-          <Link
-            href="/"
-            className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors"
-          >
-            Back
-          </Link>
+          <div className="flex items-center space-x-3">
+            <Link
+              href="/audit"
+              className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-colors"
+            >
+              Audit Logs
+            </Link>
+            <Link
+              href="/"
+              className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors"
+            >
+              Back
+            </Link>
+          </div>
         </div>
 
         {/* Role Legend */}

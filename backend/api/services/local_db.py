@@ -119,6 +119,22 @@ def _create_tables(conn: sqlite3.Connection):
         )
     """)
 
+    # Audit logs table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            log_id TEXT PRIMARY KEY,
+            timestamp TEXT NOT NULL,
+            user_email TEXT,
+            user_name TEXT,
+            action TEXT NOT NULL,
+            resource_type TEXT,
+            resource_id TEXT,
+            details TEXT,
+            ip_address TEXT,
+            user_agent TEXT
+        )
+    """)
+
     conn.commit()
 
 def insert_meeting_metadata(meeting_data: Dict[str, Any]):
@@ -785,3 +801,208 @@ def count_admins() -> int:
     count = cursor.fetchone()["count"]
     conn.close()
     return count
+
+
+# Audit log functions
+AUDIT_ACTIONS = [
+    "LOGIN",
+    "LOGOUT",
+    "UPLOAD_MEETING",
+    "VIEW_PROJECT",
+    "VIEW_TASK",
+    "VIEW_RISK",
+    "EXPORT_DATA",
+    "UPDATE_SETTINGS",
+    "UPDATE_USER_ROLE",
+    "DELETE_USER",
+    "GENERATE_AGENDA",
+    "VIEW_DIFF",
+]
+
+
+def log_audit(
+    action: str,
+    user_email: str = None,
+    user_name: str = None,
+    resource_type: str = None,
+    resource_id: str = None,
+    details: str = None,
+    ip_address: str = None,
+    user_agent: str = None
+) -> str:
+    """Record an audit log entry."""
+    import uuid
+
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    log_id = str(uuid.uuid4())
+    timestamp = datetime.now().isoformat()
+
+    cursor.execute("""
+        INSERT INTO audit_logs (
+            log_id, timestamp, user_email, user_name, action,
+            resource_type, resource_id, details, ip_address, user_agent
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        log_id, timestamp, user_email, user_name, action,
+        resource_type, resource_id, details, ip_address, user_agent
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return log_id
+
+
+def list_audit_logs(
+    limit: int = 100,
+    offset: int = 0,
+    user_email: str = None,
+    action: str = None,
+    resource_type: str = None,
+    start_date: str = None,
+    end_date: str = None
+) -> List[Dict[str, Any]]:
+    """List audit logs with optional filtering."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    where_clauses = []
+    params = []
+
+    if user_email:
+        where_clauses.append("user_email = ?")
+        params.append(user_email)
+
+    if action:
+        where_clauses.append("action = ?")
+        params.append(action)
+
+    if resource_type:
+        where_clauses.append("resource_type = ?")
+        params.append(resource_type)
+
+    if start_date:
+        where_clauses.append("timestamp >= ?")
+        params.append(start_date)
+
+    if end_date:
+        where_clauses.append("timestamp <= ?")
+        params.append(end_date)
+
+    where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+    query = f"""
+        SELECT * FROM audit_logs
+        {where_clause}
+        ORDER BY timestamp DESC
+        LIMIT ? OFFSET ?
+    """
+    params.extend([limit, offset])
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [dict(row) for row in rows]
+
+
+def count_audit_logs(
+    user_email: str = None,
+    action: str = None,
+    resource_type: str = None,
+    start_date: str = None,
+    end_date: str = None
+) -> int:
+    """Count audit logs with optional filtering."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    where_clauses = []
+    params = []
+
+    if user_email:
+        where_clauses.append("user_email = ?")
+        params.append(user_email)
+
+    if action:
+        where_clauses.append("action = ?")
+        params.append(action)
+
+    if resource_type:
+        where_clauses.append("resource_type = ?")
+        params.append(resource_type)
+
+    if start_date:
+        where_clauses.append("timestamp >= ?")
+        params.append(start_date)
+
+    if end_date:
+        where_clauses.append("timestamp <= ?")
+        params.append(end_date)
+
+    where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+    query = f"SELECT COUNT(*) as count FROM audit_logs {where_clause}"
+    cursor.execute(query, params)
+    count = cursor.fetchone()["count"]
+    conn.close()
+
+    return count
+
+
+def get_audit_stats(days: int = 30) -> Dict[str, Any]:
+    """Get audit log statistics for the last N days."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    start_date = (datetime.now() - __import__("datetime").timedelta(days=days)).isoformat()
+
+    # Actions by type
+    cursor.execute("""
+        SELECT action, COUNT(*) as count
+        FROM audit_logs
+        WHERE timestamp >= ?
+        GROUP BY action
+        ORDER BY count DESC
+    """, (start_date,))
+    by_action = {row["action"]: row["count"] for row in cursor.fetchall()}
+
+    # Actions by user
+    cursor.execute("""
+        SELECT user_email, COUNT(*) as count
+        FROM audit_logs
+        WHERE timestamp >= ? AND user_email IS NOT NULL
+        GROUP BY user_email
+        ORDER BY count DESC
+        LIMIT 10
+    """, (start_date,))
+    by_user = [{"email": row["user_email"], "count": row["count"]} for row in cursor.fetchall()]
+
+    # Daily activity
+    cursor.execute("""
+        SELECT date(timestamp) as date, COUNT(*) as count
+        FROM audit_logs
+        WHERE timestamp >= ?
+        GROUP BY date(timestamp)
+        ORDER BY date DESC
+    """, (start_date,))
+    daily = [{"date": row["date"], "count": row["count"]} for row in cursor.fetchall()]
+
+    # Total count
+    cursor.execute("""
+        SELECT COUNT(*) as total FROM audit_logs WHERE timestamp >= ?
+    """, (start_date,))
+    total = cursor.fetchone()["total"]
+
+    conn.close()
+
+    return {
+        "period_days": days,
+        "total": total,
+        "by_action": by_action,
+        "by_user": by_user,
+        "daily": daily
+    }

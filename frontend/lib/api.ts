@@ -450,3 +450,67 @@ export async function getAvailableRoles(): Promise<{
   const res = await authenticatedFetch(`${API_URL}/users/roles/available`);
   return res.json();
 }
+
+// Audit log endpoints
+export interface AuditLog {
+  log_id: string;
+  timestamp: string;
+  user_email?: string;
+  user_name?: string;
+  action: string;
+  resource_type?: string;
+  resource_id?: string;
+  details?: string;
+  ip_address?: string;
+  user_agent?: string;
+}
+
+export interface AuditLogListResponse {
+  logs: AuditLog[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AuditStats {
+  period_days: number;
+  total: number;
+  by_action: Record<string, number>;
+  by_user: Array<{ email: string; count: number }>;
+  daily: Array<{ date: string; count: number }>;
+}
+
+export async function getAuditLogs(filters?: {
+  limit?: number;
+  offset?: number;
+  user_email?: string;
+  action?: string;
+  resource_type?: string;
+  start_date?: string;
+  end_date?: string;
+}): Promise<AuditLogListResponse> {
+  const params = new URLSearchParams();
+  if (filters?.limit) params.append('limit', filters.limit.toString());
+  if (filters?.offset) params.append('offset', filters.offset.toString());
+  if (filters?.user_email) params.append('user_email', filters.user_email);
+  if (filters?.action) params.append('action', filters.action);
+  if (filters?.resource_type) params.append('resource_type', filters.resource_type);
+  if (filters?.start_date) params.append('start_date', filters.start_date);
+  if (filters?.end_date) params.append('end_date', filters.end_date);
+
+  const res = await authenticatedFetch(`${API_URL}/audit/logs?${params.toString()}`);
+  return res.json();
+}
+
+export async function getAuditStats(days: number = 30): Promise<AuditStats> {
+  const res = await authenticatedFetch(`${API_URL}/audit/stats?days=${days}`);
+  return res.json();
+}
+
+export async function getAuditActions(): Promise<{
+  actions: string[];
+  descriptions: Record<string, string>;
+}> {
+  const res = await authenticatedFetch(`${API_URL}/audit/actions`);
+  return res.json();
+}

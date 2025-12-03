@@ -29,7 +29,7 @@
 ### Management & Settings
 *   **User Management**: Simple Google OAuth login.
 *   **Roles & Permissions**: Admin, PM, Member roles with role-based access control. *(Implemented)*
-*   **[Future] Audit Logs**: Track system usage and data access.
+*   **Audit Logs**: Track system usage and data access with detailed activity history. *(Implemented)*
 
 ## 1.2. Functional Requirements
 

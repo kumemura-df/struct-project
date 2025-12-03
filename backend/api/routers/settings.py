@@ -1,9 +1,10 @@
 """Settings management endpoints."""
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import Optional
 from services import local_db, slack
 from auth.middleware import get_current_user
+from routers.audit import log_user_action
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -44,6 +45,7 @@ def get_slack_settings(current_user: dict = Depends(get_current_user)):
 @router.post("/slack")
 def update_slack_settings(
     settings: SlackSettings,
+    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """Update Slack notification settings."""
@@ -52,6 +54,16 @@ def update_slack_settings(
         local_db.set_setting("slack_notify_high_risk", str(settings.notify_on_high_risk).lower())
         local_db.set_setting("slack_notify_overdue", str(settings.notify_on_overdue).lower())
         local_db.set_setting("slack_notify_meeting", str(settings.notify_on_meeting_processed).lower())
+
+        # Log audit
+        log_user_action(
+            request=request,
+            action="UPDATE_SETTINGS",
+            current_user=current_user,
+            resource_type="settings",
+            resource_id="slack",
+            details=f"Updated Slack settings (high_risk={settings.notify_on_high_risk}, overdue={settings.notify_on_overdue}, meeting={settings.notify_on_meeting_processed})"
+        )
 
         return {"message": "Slack settings updated successfully"}
     except Exception as e:
