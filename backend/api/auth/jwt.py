@@ -5,7 +5,11 @@ from typing import Optional, Dict, Any
 
 from jose import JWTError, jwt
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-secret-key-change-in-production")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    import warnings
+    warnings.warn("JWT_SECRET_KEY not set! Using insecure default for development only.", UserWarning)
+    SECRET_KEY = "dev-secret-key-change-in-production-immediately"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 

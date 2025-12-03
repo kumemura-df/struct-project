@@ -17,6 +17,7 @@ except ImportError:
 
 PROJECT_ID = os.getenv("PROJECT_ID", "local-dev")
 REGION = os.getenv("REGION", "asia-northeast1")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash-001")
 
 # Initialize Vertex AI if available
 if VERTEX_AI_AVAILABLE and PROJECT_ID != "local-dev":
@@ -90,7 +91,7 @@ def extract_info(text: str, meeting_date: str) -> Dict[str, Any]:
     if not VERTEX_AI_AVAILABLE:
         raise Exception("Vertex AI is not available. Please install google-cloud-aiplatform and configure credentials.")
     
-    model = GenerativeModel("gemini-1.5-flash-001")
+    model = GenerativeModel(GEMINI_MODEL)
     
     schema = {
         "type": "object",
@@ -182,7 +183,19 @@ def extract_info(text: str, meeting_date: str) -> Dict[str, Any]:
         generation_config=generation_config,
     )
 
-    return json.loads(response.text)
+    try:
+        return json.loads(response.text)
+    except json.JSONDecodeError as e:
+        print(f"Failed to parse LLM response as JSON: {e}")
+        print(f"Raw response: {response.text[:500]}")
+        # Return empty structure on parse failure
+        return {
+            "projects": [],
+            "tasks": [],
+            "risks": [],
+            "decisions": [],
+            "parse_error": str(e)
+        }
 
 
 def process_meeting_notes(
@@ -237,7 +250,7 @@ def generate_meeting_agenda(
     if not VERTEX_AI_AVAILABLE:
         return _generate_agenda_fallback(project_name, tasks, risks, decisions)
 
-    model = GenerativeModel("gemini-1.5-flash-001")
+    model = GenerativeModel(GEMINI_MODEL)
 
     # Prepare context
     overdue_tasks = [t for t in tasks if t.get("due_date") and t["due_date"] < datetime.now().strftime("%Y-%m-%d") and t.get("status") != "DONE"]
