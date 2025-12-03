@@ -120,8 +120,14 @@ async def callback(request: Request, code: str, state: Optional[str] = None, err
         })
         
         # Validate redirect URL
-        redirect_url = state or FRONTEND_URL
-        if not redirect_url.startswith(FRONTEND_URL) and not redirect_url.startswith("/"):
+        redirect_url = state or "/"
+        
+        # If relative path, prepend FRONTEND_URL
+        if redirect_url.startswith("/"):
+            redirect_url = f"{FRONTEND_URL}{redirect_url}"
+        # If not starting with FRONTEND_URL, reset to home
+        elif not redirect_url.startswith(FRONTEND_URL):
+            logger.warning(f"Invalid redirect URL blocked: {redirect_url}")
             redirect_url = FRONTEND_URL
         
         # Create response with ONLY HttpOnly cookie (no token in URL)
