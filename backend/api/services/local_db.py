@@ -106,6 +106,19 @@ def _create_tables(conn: sqlite3.Connection):
         )
     """)
 
+    # User roles table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_roles (
+            user_id TEXT PRIMARY KEY,
+            email TEXT UNIQUE NOT NULL,
+            name TEXT,
+            picture TEXT,
+            role TEXT DEFAULT 'MEMBER',
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
     conn.commit()
 
 def insert_meeting_metadata(meeting_data: Dict[str, Any]):
@@ -663,3 +676,112 @@ def get_all_project_health_scores() -> List[Dict[str, Any]]:
         {**get_project_health_score(p["project_id"]), "project_name": p["project_name"]}
         for p in projects
     ]
+
+
+# User roles functions
+VALID_ROLES = ["ADMIN", "PM", "MEMBER"]
+
+
+def get_user_role(email: str) -> Optional[Dict[str, Any]]:
+    """Get user role by email."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM user_roles WHERE email = ?", (email,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_or_create_user(email: str, name: str = None, picture: str = None) -> Dict[str, Any]:
+    """Get existing user or create new one with default MEMBER role."""
+    import uuid
+
+    existing = get_user_role(email)
+    if existing:
+        return existing
+
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    user_id = str(uuid.uuid4())
+    now = datetime.now().isoformat()
+
+    # First user becomes ADMIN
+    cursor.execute("SELECT COUNT(*) as count FROM user_roles")
+    is_first_user = cursor.fetchone()["count"] == 0
+    default_role = "ADMIN" if is_first_user else "MEMBER"
+
+    cursor.execute("""
+        INSERT INTO user_roles (user_id, email, name, picture, role, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, email, name, picture, default_role, now, now))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "user_id": user_id,
+        "email": email,
+        "name": name,
+        "picture": picture,
+        "role": default_role,
+        "created_at": now,
+        "updated_at": now
+    }
+
+
+def update_user_role(email: str, role: str) -> Optional[Dict[str, Any]]:
+    """Update user's role."""
+    if role not in VALID_ROLES:
+        raise ValueError(f"Invalid role: {role}. Must be one of {VALID_ROLES}")
+
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    now = datetime.now().isoformat()
+    cursor.execute("""
+        UPDATE user_roles SET role = ?, updated_at = ? WHERE email = ?
+    """, (role, now, email))
+
+    conn.commit()
+
+    if cursor.rowcount == 0:
+        conn.close()
+        return None
+
+    cursor.execute("SELECT * FROM user_roles WHERE email = ?", (email,))
+    row = cursor.fetchone()
+    conn.close()
+
+    return dict(row) if row else None
+
+
+def list_users() -> List[Dict[str, Any]]:
+    """List all users."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM user_roles ORDER BY created_at DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def delete_user(email: str) -> bool:
+    """Delete a user by email."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM user_roles WHERE email = ?", (email,))
+    conn.commit()
+    deleted = cursor.rowcount > 0
+    conn.close()
+    return deleted
+
+
+def count_admins() -> int:
+    """Count number of admin users."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) as count FROM user_roles WHERE role = 'ADMIN'")
+    count = cursor.fetchone()["count"]
+    conn.close()
+    return count

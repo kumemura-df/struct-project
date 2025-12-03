@@ -59,7 +59,7 @@ def read_root():
     return {"message": "Project Progress DB API is running", "version": "1.0.0"}
 
 # Import and include routers
-from routers import upload, projects, tasks, auth, risks, export, meetings, settings, agenda
+from routers import upload, projects, tasks, auth, risks, export, meetings, settings, agenda, users
 
 app.include_router(auth.router)
 app.include_router(upload.router)
@@ -70,4 +70,5 @@ app.include_router(export.router)
 app.include_router(meetings.router)
 app.include_router(settings.router)
 app.include_router(agenda.router)
+app.include_router(users.router)
 

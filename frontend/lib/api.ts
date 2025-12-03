@@ -390,3 +390,63 @@ export async function generatePortfolioAgenda(): Promise<GeneratedAgenda> {
   const res = await authenticatedFetch(`${API_URL}/agenda/generate/all`);
   return res.json();
 }
+
+// User management endpoints
+export type UserRole = 'ADMIN' | 'PM' | 'MEMBER';
+
+export interface User {
+  user_id: string;
+  email: string;
+  name?: string;
+  picture?: string;
+  role: UserRole;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CurrentUser {
+  email: string;
+  name?: string;
+  picture?: string;
+  role: UserRole;
+  user_id?: string;
+}
+
+export async function getCurrentUser(): Promise<CurrentUser> {
+  const res = await authenticatedFetch(`${API_URL}/users/me`);
+  return res.json();
+}
+
+export async function listUsers(): Promise<User[]> {
+  const res = await authenticatedFetch(`${API_URL}/users/`);
+  return res.json();
+}
+
+export async function getUser(email: string): Promise<User> {
+  const res = await authenticatedFetch(`${API_URL}/users/${encodeURIComponent(email)}`);
+  return res.json();
+}
+
+export async function updateUserRole(email: string, role: UserRole): Promise<{ message: string; user: User }> {
+  const res = await authenticatedFetch(`${API_URL}/users/${encodeURIComponent(email)}/role`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  });
+  return res.json();
+}
+
+export async function deleteUser(email: string): Promise<{ message: string }> {
+  const res = await authenticatedFetch(`${API_URL}/users/${encodeURIComponent(email)}`, {
+    method: 'DELETE',
+  });
+  return res.json();
+}
+
+export async function getAvailableRoles(): Promise<{
+  roles: UserRole[];
+  descriptions: Record<UserRole, string>;
+}> {
+  const res = await authenticatedFetch(`${API_URL}/users/roles/available`);
+  return res.json();
+}
