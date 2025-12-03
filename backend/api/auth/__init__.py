@@ -5,6 +5,7 @@ from .oauth import (
     exchange_code_for_token,
     verify_google_token,
     get_user_info_from_credentials,
+    is_oauth_configured,
 )
 from .middleware import get_current_user, get_current_user_optional, require_auth
 
@@ -15,6 +16,7 @@ __all__ = [
     "exchange_code_for_token",
     "verify_google_token",
     "get_user_info_from_credentials",
+    "is_oauth_configured",
     "get_current_user",
     "get_current_user_optional",
     "require_auth",

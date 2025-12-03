@@ -1,6 +1,21 @@
-google-cloud-storage
-google-cloud-bigquery
-google-cloud-aiplatform
-flask
-dateparser
-python-dateutil
+# Project Progress DB Worker - Python Dependencies
+# Generated: 2024-12
+#
+# To update: pip-compile requirements.in --output-file=requirements.txt
+# To sync: pip-sync requirements.txt
+
+# Web Framework (for Pub/Sub HTTP push)
+flask==3.1.0
+gunicorn==23.0.0
+
+# Google Cloud
+google-cloud-storage==2.18.2
+google-cloud-bigquery==3.27.0
+google-cloud-aiplatform==1.72.0
+
+# Date parsing
+dateparser==1.2.0
+python-dateutil==2.9.0.post0
+
+# Utilities
+tenacity==9.0.0

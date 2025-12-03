@@ -1,0 +1,353 @@
+# Cloud Build configuration for PRODUCTION environment
+# Triggered by tag pushes (e.g., v1.0.0)
+# Requires manual approval before deployment
+#
+# Deployment flow:
+# 1. Run tests (unit, integration)
+# 2. Security scan (container vulnerability)
+# 3. Build & push images
+# 4. Deploy to production
+# 5. Run smoke tests
+# 6. Run E2E tests
+
+steps:
+  # ===========================================================================
+  # Phase 1: Pre-deployment Validation
+  # ===========================================================================
+
+  # Run unit tests
+  - name: 'python:3.11-slim'
+    id: 'test-api'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        cd backend/api
+        pip install --quiet -r requirements.txt pytest httpx
+        PYTHONPATH=. USE_LOCAL_DB=true pytest tests/ -v --tb=short
+        echo "✅ API tests passed"
+
+  # Lint Python code
+  - name: 'python:3.11-slim'
+    id: 'lint-python'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        pip install --quiet ruff
+        ruff check backend/ --ignore E501
+        echo "✅ Python lint passed"
+    waitFor: ['-']
+
+  # Lint and build frontend
+  - name: 'node:20-slim'
+    id: 'lint-frontend'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        cd frontend
+        npm ci --silent
+        npm run lint
+        npm run build
+        echo "✅ Frontend lint and build passed"
+    waitFor: ['-']
+
+  # ===========================================================================
+  # Phase 2: Build Images
+  # ===========================================================================
+
+  # Build API image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-api'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/api:${TAG_NAME}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/api:prod-latest'
+      - '--build-arg'
+      - 'ENVIRONMENT=prod'
+      - '-f'
+      - 'backend/api/Dockerfile'
+      - 'backend/api'
+    waitFor: ['test-api', 'lint-python']
+
+  # Build Worker image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-worker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/worker:${TAG_NAME}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/worker:prod-latest'
+      - '--build-arg'
+      - 'ENVIRONMENT=prod'
+      - '-f'
+      - 'backend/worker/Dockerfile'
+      - 'backend/worker'
+    waitFor: ['lint-python']
+
+  # ===========================================================================
+  # Phase 3: Security Scanning
+  # ===========================================================================
+
+  # Scan API image for vulnerabilities
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'scan-api'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        # Push to temp tag for scanning
+        docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/api:${TAG_NAME}
+        
+        # Wait for vulnerability scan
+        sleep 30
+        
+        # Check for critical vulnerabilities
+        gcloud artifacts docker images describe \
+          ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/api:${TAG_NAME} \
+          --show-all-metadata --format=json | \
+          python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+vulns = data.get('discovery', [{}])[0].get('vulnerability', {})
+critical = vulns.get('critical', 0)
+high = vulns.get('high', 0)
+if critical > 0:
+    print(f'❌ CRITICAL vulnerabilities found: {critical}')
+    sys.exit(1)
+if high > ${_MAX_HIGH_VULNS}:
+    print(f'❌ Too many HIGH vulnerabilities: {high} (max: ${_MAX_HIGH_VULNS})')
+    sys.exit(1)
+print(f'✅ Security scan passed (Critical: {critical}, High: {high})')
+"
+    waitFor: ['build-api']
+
+  # ===========================================================================
+  # Phase 4: Push Images
+  # ===========================================================================
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-api'
+    args: ['push', '--all-tags', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/api']
+    waitFor: ['scan-api']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-worker'
+    args: ['push', '--all-tags', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/worker']
+    waitFor: ['build-worker']
+
+  # ===========================================================================
+  # Phase 5: Deploy to Production
+  # ===========================================================================
+
+  # Deploy API
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-api'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'project-progress-api-${_ENVIRONMENT}'
+      - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/api:${TAG_NAME}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--service-account=${_API_SA_EMAIL}'
+      - '--set-env-vars=PROJECT_ID=${PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},PUBSUB_TOPIC=${_PUBSUB_TOPIC},ENVIRONMENT=${_ENVIRONMENT},ALLOWED_OAUTH_DOMAINS=${_ALLOWED_OAUTH_DOMAINS}'
+      - '--set-secrets=OAUTH_CLIENT_ID=oauth-client-id:latest,OAUTH_CLIENT_SECRET=oauth-client-secret:latest,JWT_SECRET_KEY=jwt-secret-key:latest'
+      - '--min-instances=1'
+      - '--max-instances=10'
+      - '--cpu=1'
+      - '--memory=512Mi'
+      - '--concurrency=80'
+      - '--timeout=60s'
+    waitFor: ['push-api']
+
+  # Build and push Frontend (needs API URL)
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-frontend'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        API_URL=$$(gcloud run services describe project-progress-api-${_ENVIRONMENT} --region=${_REGION} --format='value(status.url)')
+        echo "Building frontend with API_URL: $$API_URL"
+        docker build \
+          --build-arg NEXT_PUBLIC_API_URL=$$API_URL \
+          -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:${TAG_NAME} \
+          -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:prod-latest \
+          -f frontend/Dockerfile \
+          frontend
+        docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:${TAG_NAME}
+        docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:prod-latest
+    waitFor: ['deploy-api', 'lint-frontend']
+
+  # Deploy Worker
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-worker'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'project-progress-worker-${_ENVIRONMENT}'
+      - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/worker:${TAG_NAME}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--no-allow-unauthenticated'
+      - '--service-account=${_WORKER_SA_EMAIL}'
+      - '--set-env-vars=PROJECT_ID=${PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},REGION=${_REGION},ENVIRONMENT=${_ENVIRONMENT}'
+      - '--min-instances=0'
+      - '--max-instances=10'
+      - '--cpu=2'
+      - '--memory=1Gi'
+      - '--timeout=300s'
+    waitFor: ['push-worker']
+
+  # Deploy Frontend
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-frontend'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'project-progress-frontend-${_ENVIRONMENT}'
+      - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:${TAG_NAME}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--min-instances=1'
+      - '--max-instances=10'
+      - '--cpu=1'
+      - '--memory=512Mi'
+    waitFor: ['build-frontend']
+
+  # ===========================================================================
+  # Phase 6: Post-deployment Verification
+  # ===========================================================================
+
+  # Smoke test API
+  - name: 'gcr.io/cloud-builders/curl'
+    id: 'smoke-test-api'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        API_URL=$$(gcloud run services describe project-progress-api-${_ENVIRONMENT} --region=${_REGION} --format='value(status.url)')
+        echo "Testing API at $$API_URL"
+        
+        # Health check
+        curl -sf "$$API_URL/" || { echo "❌ Health check failed"; exit 1; }
+        
+        # Check response structure
+        curl -sf "$$API_URL/" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+assert 'version' in data, 'Missing version in response'
+print(f'✅ API smoke test passed (version: {data[\"version\"]})')
+"
+    waitFor: ['deploy-api']
+
+  # Smoke test Frontend
+  - name: 'gcr.io/cloud-builders/curl'
+    id: 'smoke-test-frontend'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        FRONTEND_URL=$$(gcloud run services describe project-progress-frontend-${_ENVIRONMENT} --region=${_REGION} --format='value(status.url)')
+        echo "Testing Frontend at $$FRONTEND_URL"
+        
+        # Check that page loads
+        HTTP_CODE=$$(curl -sf -o /dev/null -w "%{http_code}" "$$FRONTEND_URL/")
+        if [ "$$HTTP_CODE" != "200" ]; then
+          echo "❌ Frontend returned HTTP $$HTTP_CODE"
+          exit 1
+        fi
+        echo "✅ Frontend smoke test passed"
+    waitFor: ['deploy-frontend']
+
+  # E2E Test (optional, depends on test infrastructure)
+  - name: 'python:3.11-slim'
+    id: 'e2e-test'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        if [ "${_RUN_E2E}" != "true" ]; then
+          echo "⏭️ E2E tests skipped (set _RUN_E2E=true to enable)"
+          exit 0
+        fi
+        
+        pip install --quiet requests
+        
+        API_URL=$$(gcloud run services describe project-progress-api-${_ENVIRONMENT} --region=${_REGION} --format='value(status.url)')
+        
+        python3 << 'EOF'
+import requests
+import sys
+
+api_url = "${API_URL}"
+print(f"Running E2E tests against {api_url}")
+
+# Test 1: Health check
+resp = requests.get(f"{api_url}/")
+assert resp.status_code == 200, f"Health check failed: {resp.status_code}"
+print("✅ Health check passed")
+
+# Test 2: Auth redirect
+resp = requests.get(f"{api_url}/auth/me", allow_redirects=False)
+assert resp.status_code in [401, 403], f"Auth check failed: {resp.status_code}"
+print("✅ Auth protection working")
+
+print("✅ E2E tests passed")
+EOF
+    waitFor: ['smoke-test-api', 'smoke-test-frontend']
+
+  # ===========================================================================
+  # Phase 7: Notification
+  # ===========================================================================
+
+  - name: 'gcr.io/cloud-builders/curl'
+    id: 'notify-success'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        echo "=========================================="
+        echo "🎉 Production deployment successful!"
+        echo "=========================================="
+        echo "Version: ${TAG_NAME}"
+        echo "API: $$(gcloud run services describe project-progress-api-${_ENVIRONMENT} --region=${_REGION} --format='value(status.url)')"
+        echo "Frontend: $$(gcloud run services describe project-progress-frontend-${_ENVIRONMENT} --region=${_REGION} --format='value(status.url)')"
+        echo "=========================================="
+    waitFor: ['e2e-test', 'deploy-worker']
+
+# Substitution variables
+substitutions:
+  _REGION: asia-northeast1
+  _REPOSITORY: project-progress-db
+  _ENVIRONMENT: prod
+  _BIGQUERY_DATASET: project_progress_db
+  _PUBSUB_TOPIC: upload-events
+  _ALLOWED_OAUTH_DOMAINS: ''  # REQUIRED: Set via trigger
+  _API_SA_EMAIL: ''           # REQUIRED: Set via trigger
+  _WORKER_SA_EMAIL: ''        # REQUIRED: Set via trigger
+  _MAX_HIGH_VULNS: '5'        # Max allowed HIGH severity vulnerabilities
+  _RUN_E2E: 'false'           # Set to 'true' to run E2E tests
+
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+  dynamic_substitutions: true
+
+# Approval required for production (configure in Cloud Build trigger)
+# availableSecrets:
+#   secretManager:
+#     - versionName: projects/${PROJECT_ID}/secrets/slack-webhook/versions/latest
+#       env: 'SLACK_WEBHOOK'
+
+timeout: 2400s  # 40 minutes

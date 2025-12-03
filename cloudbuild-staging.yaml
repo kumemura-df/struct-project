@@ -1,0 +1,178 @@
+# Cloud Build configuration for STAGING environment
+# Triggered by pushes to main branch
+# Creates/updates staging environment for pre-production testing
+
+steps:
+  # Build API image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-api'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/api:${SHORT_SHA}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/api:staging-latest'
+      - '-f'
+      - 'backend/api/Dockerfile'
+      - 'backend/api'
+
+  # Build Worker image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-worker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/worker:${SHORT_SHA}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/worker:staging-latest'
+      - '-f'
+      - 'backend/worker/Dockerfile'
+      - 'backend/worker'
+
+  # Push API image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-api'
+    args:
+      - 'push'
+      - '--all-tags'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/api'
+    waitFor: ['build-api']
+
+  # Push Worker image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-worker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/worker'
+    waitFor: ['build-worker']
+
+  # Deploy API to Cloud Run (staging)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-api'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'project-progress-api-staging'
+      - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/api:${SHORT_SHA}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--service-account=${_API_SA_EMAIL}'
+      - '--set-env-vars=PROJECT_ID=${PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},PUBSUB_TOPIC=${_PUBSUB_TOPIC},ENVIRONMENT=staging,FRONTEND_URL=${_FRONTEND_URL},ALLOWED_OAUTH_DOMAINS=${_ALLOWED_OAUTH_DOMAINS}'
+      - '--set-secrets=OAUTH_CLIENT_ID=oauth-client-id:latest,OAUTH_CLIENT_SECRET=oauth-client-secret:latest,JWT_SECRET_KEY=jwt-secret-key:latest'
+    waitFor: ['push-api']
+
+  # Build Frontend image (after API is deployed to get URL)
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-frontend'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        # Get API URL first
+        API_URL=$$(gcloud run services describe project-progress-api-staging --region=${_REGION} --format='value(status.url)' 2>/dev/null || echo 'https://project-progress-api-staging-placeholder.run.app')
+        echo "Building frontend with API_URL: $$API_URL"
+        docker build \
+          --build-arg NEXT_PUBLIC_API_URL=$$API_URL \
+          -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:${SHORT_SHA} \
+          -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:staging-latest \
+          -f frontend/Dockerfile \
+          frontend
+    waitFor: ['deploy-api']
+
+  # Push Frontend image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-frontend'
+    args:
+      - 'push'
+      - '--all-tags'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend'
+    waitFor: ['build-frontend']
+
+  # Deploy Worker to Cloud Run (staging)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-worker'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'project-progress-worker-staging'
+      - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/worker:${SHORT_SHA}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--no-allow-unauthenticated'
+      - '--service-account=${_WORKER_SA_EMAIL}'
+      - '--set-env-vars=PROJECT_ID=${PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},REGION=${_REGION}'
+    waitFor: ['push-worker']
+
+  # Deploy Frontend to Cloud Run (staging)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-frontend'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'project-progress-frontend-staging'
+      - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:${SHORT_SHA}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+    waitFor: ['push-frontend', 'deploy-api']
+
+  # Run unit tests before marking as complete
+  - name: 'python:3.11-slim'
+    id: 'run-tests'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        cd backend/api
+        pip install -q pytest httpx python-jose[cryptography] fastapi uvicorn \
+          google-cloud-storage google-cloud-bigquery google-cloud-pubsub \
+          google-auth google-auth-oauthlib python-multipart dateparser python-dateutil
+        PYTHONPATH=. pytest tests/ -v --tb=short
+    waitFor: ['build-api']
+
+  # Smoke test API
+  - name: 'gcr.io/cloud-builders/curl'
+    id: 'test-api'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        API_URL=$$(gcloud run services describe project-progress-api-staging --region=${_REGION} --format='value(status.url)')
+        echo "Testing API at $$API_URL"
+        curl -f "$$API_URL/" || exit 1
+    waitFor: ['deploy-api']
+
+  # Smoke test Frontend
+  - name: 'gcr.io/cloud-builders/curl'
+    id: 'test-frontend'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        FRONTEND_URL=$$(gcloud run services describe project-progress-frontend-staging --region=${_REGION} --format='value(status.url)')
+        echo "Testing Frontend at $$FRONTEND_URL"
+        curl -f "$$FRONTEND_URL/" || exit 1
+    waitFor: ['deploy-frontend']
+
+# Substitution variables for staging
+substitutions:
+  _REGION: asia-northeast1
+  _REPOSITORY: project-progress-db
+  _BIGQUERY_DATASET: project_progress_db_staging
+  _PUBSUB_TOPIC: upload-events-staging
+  _FRONTEND_URL: ''  # Will be set after frontend deployment
+  _ALLOWED_OAUTH_DOMAINS: ''
+  _API_SA_EMAIL: ''  # Set via trigger
+  _WORKER_SA_EMAIL: ''  # Set via trigger
+
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1800s  # 30 minutes
+

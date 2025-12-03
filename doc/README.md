@@ -75,6 +75,13 @@
 | 10.3 | テストケース | [10_test_documentation.md](3_implementation/10_test_documentation.md#103-テストケース) | 具体的なテスト手順 |
 | 11.1 | 本番データ化処理仕様書 | [11_migration_spec.md](3_implementation/11_migration_spec.md) | データ移行・初期化手順 |
 
+### 4. 運用フェーズ
+
+| # | ドキュメント | ファイル | 概要 |
+|---|-------------|---------|------|
+| 12.1 | デプロイメントガイド | [12_deployment_guide.md](4_operations/12_deployment_guide.md) | デプロイ手順書 |
+| 13.1 | 運用手順書 | [13_operations_runbook.md](4_operations/13_operations_runbook.md) | 障害対応・日常運用 |
+
 ---
 
 ## クイックリファレンス

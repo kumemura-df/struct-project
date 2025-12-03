@@ -1,8 +1,12 @@
 resource "google_bigquery_dataset" "main" {
-  dataset_id  = "project_progress_db"
-  friendly_name = "Project Progress DB"
-  description = "Dataset for Project Progress DB MVP"
-  location    = var.location
+  dataset_id    = var.bigquery_dataset
+  friendly_name = "Project Progress DB (${var.environment})"
+  description   = "Dataset for Project Progress DB - ${var.environment} environment"
+  location      = var.location
+  
+  labels = {
+    environment = var.environment
+  }
 }
 
 resource "google_bigquery_table" "meetings" {
