@@ -108,7 +108,7 @@ def get_authorization_url(redirect_uri: str, state: Optional[str] = None) -> str
     flow = create_oauth_flow(redirect_uri)
     authorization_url, _ = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes="true",
+        include_granted_scopes="false",  # Don't include previously granted scopes
         state=state,
         prompt="select_account",  # Always show account selector
     )
