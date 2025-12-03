@@ -552,3 +552,114 @@ def get_high_risks() -> List[Dict[str, Any]]:
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def get_project_health_score(project_id: str) -> Dict[str, Any]:
+    """Calculate health score for a project (0-100).
+
+    Score breakdown:
+    - Task completion rate: 30 points (done / total)
+    - No overdue tasks: 25 points (inverted ratio of overdue)
+    - Risk level: 25 points (lower = better)
+    - Recent activity: 20 points (meetings in last 30 days)
+    """
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    # Get tasks for project
+    cursor.execute("""
+        SELECT status, due_date FROM tasks WHERE project_id = ?
+    """, (project_id,))
+    tasks = cursor.fetchall()
+
+    # Get risks for project
+    cursor.execute("""
+        SELECT risk_level FROM risks WHERE project_id = ?
+    """, (project_id,))
+    risks = cursor.fetchall()
+
+    # Get recent meetings (last 30 days)
+    cursor.execute("""
+        SELECT COUNT(*) as count FROM meetings m
+        WHERE m.meeting_date >= date('now', '-30 days')
+        AND EXISTS (
+            SELECT 1 FROM tasks t WHERE t.meeting_id = m.meeting_id AND t.project_id = ?
+            UNION
+            SELECT 1 FROM risks r WHERE r.meeting_id = m.meeting_id AND r.project_id = ?
+        )
+    """, (project_id, project_id))
+    recent_meetings = cursor.fetchone()["count"]
+
+    conn.close()
+
+    # Calculate scores
+    total_tasks = len(tasks)
+    done_tasks = sum(1 for t in tasks if t["status"] == "DONE")
+    overdue_tasks = sum(1 for t in tasks if t["due_date"] and t["due_date"] < datetime.now().strftime("%Y-%m-%d") and t["status"] != "DONE")
+    incomplete_tasks = total_tasks - done_tasks
+
+    # Task completion score (30 points)
+    task_score = (done_tasks / total_tasks * 30) if total_tasks > 0 else 30
+
+    # Overdue score (25 points)
+    if incomplete_tasks > 0:
+        overdue_ratio = overdue_tasks / incomplete_tasks
+        overdue_score = (1 - overdue_ratio) * 25
+    else:
+        overdue_score = 25
+
+    # Risk score (25 points)
+    total_risks = len(risks)
+    high_risks = sum(1 for r in risks if r["risk_level"] == "HIGH")
+    medium_risks = sum(1 for r in risks if r["risk_level"] == "MEDIUM")
+
+    if total_risks > 0:
+        # HIGH = 0 points, MEDIUM = 0.5 points, LOW = 1 point per risk
+        risk_points = (total_risks - high_risks - medium_risks * 0.5) / total_risks
+        risk_score = risk_points * 25
+    else:
+        risk_score = 25
+
+    # Activity score (20 points)
+    activity_score = min(recent_meetings * 5, 20)  # Max 4 meetings for full score
+
+    total_score = round(task_score + overdue_score + risk_score + activity_score)
+
+    # Determine health status
+    if total_score >= 80:
+        status = "HEALTHY"
+    elif total_score >= 60:
+        status = "AT_RISK"
+    elif total_score >= 40:
+        status = "WARNING"
+    else:
+        status = "CRITICAL"
+
+    return {
+        "project_id": project_id,
+        "score": total_score,
+        "status": status,
+        "breakdown": {
+            "task_completion": round(task_score, 1),
+            "overdue": round(overdue_score, 1),
+            "risk_level": round(risk_score, 1),
+            "activity": round(activity_score, 1)
+        },
+        "details": {
+            "total_tasks": total_tasks,
+            "done_tasks": done_tasks,
+            "overdue_tasks": overdue_tasks,
+            "total_risks": total_risks,
+            "high_risks": high_risks,
+            "recent_meetings": recent_meetings
+        }
+    }
+
+
+def get_all_project_health_scores() -> List[Dict[str, Any]]:
+    """Get health scores for all projects."""
+    projects = list_projects()
+    return [
+        {**get_project_health_score(p["project_id"]), "project_name": p["project_name"]}
+        for p in projects
+    ]

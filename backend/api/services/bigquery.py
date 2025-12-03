@@ -382,3 +382,122 @@ def get_risk_stats() -> Dict[str, Any]:
         "by_level": by_level,
         "by_project": by_project
     }
+
+
+def get_project_health_score(project_id: str) -> Dict[str, Any]:
+    """Calculate health score for a project (0-100)."""
+    if USE_LOCAL_DB:
+        return local_db.get_project_health_score(project_id)
+
+    from datetime import datetime
+
+    client = get_client()
+
+    # Get tasks for project
+    task_query = f"""
+        SELECT status, due_date FROM `{PROJECT_ID}.{DATASET_ID}.tasks`
+        WHERE project_id = @project_id
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("project_id", "STRING", project_id)
+        ]
+    )
+    tasks = list(client.query(task_query, job_config=job_config))
+
+    # Get risks for project
+    risk_query = f"""
+        SELECT risk_level FROM `{PROJECT_ID}.{DATASET_ID}.risks`
+        WHERE project_id = @project_id
+    """
+    risks = list(client.query(risk_query, job_config=job_config))
+
+    # Get recent meetings (last 30 days)
+    meeting_query = f"""
+        SELECT COUNT(DISTINCT m.meeting_id) as count
+        FROM `{PROJECT_ID}.{DATASET_ID}.meetings` m
+        WHERE m.meeting_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+        AND (
+            EXISTS (SELECT 1 FROM `{PROJECT_ID}.{DATASET_ID}.tasks` t
+                    WHERE t.meeting_id = m.meeting_id AND t.project_id = @project_id)
+            OR EXISTS (SELECT 1 FROM `{PROJECT_ID}.{DATASET_ID}.risks` r
+                       WHERE r.meeting_id = m.meeting_id AND r.project_id = @project_id)
+        )
+    """
+    recent_result = list(client.query(meeting_query, job_config=job_config))
+    recent_meetings = recent_result[0].count if recent_result else 0
+
+    # Calculate scores
+    today = datetime.now().strftime("%Y-%m-%d")
+    total_tasks = len(tasks)
+    done_tasks = sum(1 for t in tasks if t.status == "DONE")
+    overdue_tasks = sum(1 for t in tasks if t.due_date and str(t.due_date) < today and t.status != "DONE")
+    incomplete_tasks = total_tasks - done_tasks
+
+    # Task completion score (30 points)
+    task_score = (done_tasks / total_tasks * 30) if total_tasks > 0 else 30
+
+    # Overdue score (25 points)
+    if incomplete_tasks > 0:
+        overdue_ratio = overdue_tasks / incomplete_tasks
+        overdue_score = (1 - overdue_ratio) * 25
+    else:
+        overdue_score = 25
+
+    # Risk score (25 points)
+    total_risks = len(risks)
+    high_risks = sum(1 for r in risks if r.risk_level == "HIGH")
+    medium_risks = sum(1 for r in risks if r.risk_level == "MEDIUM")
+
+    if total_risks > 0:
+        risk_points = (total_risks - high_risks - medium_risks * 0.5) / total_risks
+        risk_score = risk_points * 25
+    else:
+        risk_score = 25
+
+    # Activity score (20 points)
+    activity_score = min(recent_meetings * 5, 20)
+
+    total_score = round(task_score + overdue_score + risk_score + activity_score)
+
+    # Determine health status
+    if total_score >= 80:
+        status = "HEALTHY"
+    elif total_score >= 60:
+        status = "AT_RISK"
+    elif total_score >= 40:
+        status = "WARNING"
+    else:
+        status = "CRITICAL"
+
+    return {
+        "project_id": project_id,
+        "score": total_score,
+        "status": status,
+        "breakdown": {
+            "task_completion": round(task_score, 1),
+            "overdue": round(overdue_score, 1),
+            "risk_level": round(risk_score, 1),
+            "activity": round(activity_score, 1)
+        },
+        "details": {
+            "total_tasks": total_tasks,
+            "done_tasks": done_tasks,
+            "overdue_tasks": overdue_tasks,
+            "total_risks": total_risks,
+            "high_risks": high_risks,
+            "recent_meetings": recent_meetings
+        }
+    }
+
+
+def get_all_project_health_scores() -> List[Dict[str, Any]]:
+    """Get health scores for all projects."""
+    if USE_LOCAL_DB:
+        return local_db.get_all_project_health_scores()
+
+    projects = list_projects()
+    return [
+        {**get_project_health_score(p["project_id"]), "project_name": p["project_name"]}
+        for p in projects
+    ]

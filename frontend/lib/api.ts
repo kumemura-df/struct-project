@@ -323,3 +323,39 @@ export async function sendImmediateNotifications(): Promise<{
   });
   return res.json();
 }
+
+// Health score endpoints
+export interface HealthScoreBreakdown {
+  task_completion: number;
+  overdue: number;
+  risk_level: number;
+  activity: number;
+}
+
+export interface HealthScoreDetails {
+  total_tasks: number;
+  done_tasks: number;
+  overdue_tasks: number;
+  total_risks: number;
+  high_risks: number;
+  recent_meetings: number;
+}
+
+export interface ProjectHealthScore {
+  project_id: string;
+  project_name?: string;
+  score: number;
+  status: 'HEALTHY' | 'AT_RISK' | 'WARNING' | 'CRITICAL';
+  breakdown: HealthScoreBreakdown;
+  details: HealthScoreDetails;
+}
+
+export async function getAllProjectHealthScores(): Promise<ProjectHealthScore[]> {
+  const res = await authenticatedFetch(`${API_URL}/projects/health`);
+  return res.json();
+}
+
+export async function getProjectHealthScore(projectId: string): Promise<ProjectHealthScore> {
+  const res = await authenticatedFetch(`${API_URL}/projects/${projectId}/health`);
+  return res.json();
+}

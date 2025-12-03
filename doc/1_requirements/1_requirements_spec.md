@@ -18,7 +18,7 @@
 *   **Project List**: View projects with uncompleted tasks, delayed tasks, risk counts, and last updated dates.
 *   **Task View**: Filter tasks by project, owner, date range, and status. Special views for overdue and due-this-week tasks.
 *   **Risk View**: List risks per project, sorted by level, with previews of original utterances.
-*   **[Future] Management Health Score**: Project health scores and trend analysis.
+*   **Project Health Score**: Project health scores (0-100) based on task completion, overdue ratio, risk levels, and recent activity. *(Implemented)*
 
 ### Output / Notification Features
 *   **CSV / Excel Export**: Export projects, tasks, and risks to CSV/Excel.
