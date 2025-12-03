@@ -3,21 +3,28 @@ WORKDIR /app
 
 # Accept build argument for API URL
 ARG NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+# Set default for production if not provided via build args
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://project-progress-api-prod-29226667525.asia-northeast1.run.app}
 
 COPY package*.json ./
 RUN npm ci
 COPY . .
+
+# Debug: Print the API URL during build
+RUN echo "Building with NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}"
+
 RUN npm run build
 
 FROM node:20-alpine AS runner
 WORKDIR /app
-ENV NODE_ENV production
+ENV NODE_ENV=production
+# Also set runtime env var (though NEXT_PUBLIC_* are baked at build time)
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://project-progress-api-prod-29226667525.asia-northeast1.run.app}
+
 COPY --from=builder /app/next.config.mjs ./
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 
 EXPOSE 3000
-CMD ["npm", "start"]
+CMD ["node", "server.js"]
