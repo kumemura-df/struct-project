@@ -9,9 +9,8 @@ PROJECT_ID = os.getenv("PROJECT_ID")
 DATASET_ID = os.getenv("BIGQUERY_DATASET")
 USE_LOCAL_DB = os.getenv("USE_LOCAL_DB", "false").lower() == "true"
 
-# Import local_db if in local mode
-if USE_LOCAL_DB:
-    from . import local_db
+# Always import local_db (for functions that need it even in BigQuery mode)
+from . import local_db
 
 
 def get_client():
