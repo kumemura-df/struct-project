@@ -9,7 +9,18 @@ AI会議議事録解析・プロジェクト進捗管理システム
 プロジェクトマネージャー（PM）、プロダクトマネージャー（PdM）、PMO、マネージャー層向けに設計されており、会議後の手作業による記録作成を大幅に削減し、プロジェクトの健全性を一目で把握できます。
 
 ### デプロイ先
-**本番環境URL**: [https://project-progress-frontend-prod-29226667525.asia-northeast1.run.app](https://project-progress-frontend-prod-29226667525.asia-northeast1.run.app)
+
+本番環境のURLは Cloud Run によって自動生成されます。以下のコマンドで確認できます：
+
+```bash
+# Frontend URL
+gcloud run services describe project-progress-frontend-prod --region=asia-northeast1 --format='value(status.url)'
+
+# API URL
+gcloud run services describe project-progress-api-prod --region=asia-northeast1 --format='value(status.url)'
+```
+
+> **重要**: フロントエンドをデプロイする際は、必ずAPI URLを動的に取得して `NEXT_PUBLIC_API_URL` 環境変数に設定してください。Cloud Build の `cloudbuild.yaml` はこれを自動的に行います。
 
 ---
 
@@ -63,7 +74,7 @@ graph TD
 
     subgraph AI処理
         Worker -->|ファイル読み込み| GCS
-        Worker -->|テキスト解析| Gemini[Vertex AI<br/>Gemini 1.5 Flash]
+        Worker -->|テキスト解析| Gemini[Vertex AI<br/>Gemini 2.5 Pro]
         Worker -->|構造化データ保存| BQ
     end
 
@@ -122,7 +133,7 @@ graph TD
 | **Cloud Storage** | 議事録ファイルの保存 |
 | **BigQuery** | 構造化データの保存・クエリ |
 | **Pub/Sub** | 非同期処理のメッセージキュー |
-| **Vertex AI** | Gemini 1.5 Flash による自然言語処理 |
+| **Vertex AI** | Gemini 2.5 Pro による自然言語処理 |
 | **Secret Manager** | OAuthクレデンシャル管理 |
 
 ### IaC・CI/CD
@@ -136,7 +147,7 @@ graph TD
 ## AI活用（Vertex AI Gemini）
 
 ### 使用モデル
-- **Gemini 1.5 Flash** (`gemini-1.5-flash-001`)
+- **Gemini 2.5 Pro** (`gemini-2.5-pro`)
 
 ### AI処理の詳細
 
@@ -405,11 +416,137 @@ npm run dev
 
 ### 本番デプロイ
 
+#### 1. Terraform でインフラを構築（初回のみ）
+
 ```bash
 cd terraform
 terraform init
 terraform apply
 ```
+
+#### 2. gcloud CLI からアプリケーションをデプロイ（推奨フロー）
+
+Terraform で Artifact Registry / Cloud Run / IAM などが作成済みであることを前提に、  
+アプリケーションの更新は **gcloud CLI からのビルド＆デプロイ** で行います。
+
+事前に以下を満たしていること:
+
+- `gcloud auth login` 済み
+- `gcloud config set project sandbox-471809` 済み（または各コマンドの `--project` で指定）
+- Vertex AI / Cloud Run / Artifact Registry / BigQuery / Pub/Sub などの API が有効
+
+##### 2-1. 使用するサービスアカウント
+
+Terraform 実行済み環境では、以下のサービスアカウントが作成されています（`iam.tf` 参照）。
+
+- **API 用 SA**: `api-sa-8fd82014@sandbox-471809.iam.gserviceaccount.com`
+- **Worker 用 SA**: `worker-sa-8fd82014@sandbox-471809.iam.gserviceaccount.com`
+- **Pub/Sub Push 用 SA**: `pubsub-invoker-8fd82014@sandbox-471809.iam.gserviceaccount.com`
+
+類似名のサービスアカウントが存在する可能性があるため、実際には次のコマンドで確認してください:
+
+```bash
+gcloud iam service-accounts list --project sandbox-471809
+```
+
+##### 2-2. コンテナイメージのビルド＆push
+
+Artifact Registry リポジトリ: `asia-northeast1-docker.pkg.dev/sandbox-471809/project-progress-db`
+
+```bash
+cd /Users/hayatokumemura/Desktop/Projects/Other/struct-project
+
+# API イメージ
+gcloud builds submit backend/api \
+  --project sandbox-471809 \
+  --tag asia-northeast1-docker.pkg.dev/sandbox-471809/project-progress-db/api:prod-latest
+
+# Worker イメージ
+gcloud builds submit backend/worker \
+  --project sandbox-471809 \
+  --tag asia-northeast1-docker.pkg.dev/sandbox-471809/project-progress-db/worker:prod-latest
+
+# Frontend イメージ（Dockerfile 内のデフォルト API URL を使用）
+gcloud builds submit frontend \
+  --project sandbox-471809 \
+  --tag asia-northeast1-docker.pkg.dev/sandbox-471809/project-progress-db/frontend:prod-latest
+```
+
+##### 2-3. Cloud Run API サービスのデプロイ
+
+サービス名: `project-progress-api-prod`
+
+```bash
+<<<<<<< Current (Your changes)
+<<<<<<< Current (Your changes)
+# 1. まずFrontend URLを取得（既にデプロイ済みの場合）または後で設定
+FRONTEND_URL=$(gcloud run services describe project-progress-frontend-prod --region=asia-northeast1 --format='value(status.url)' 2>/dev/null || echo "https://placeholder.run.app")
+=======
+# 1. 本番 Frontend URL を明示的に設定
+FRONTEND_URL=https://project-progress-frontend-prod-52e5pqzdua-an.a.run.app
+>>>>>>> Incoming (Background Agent changes)
+=======
+# 1. まずFrontend URLを取得（既にデプロイ済みの場合）または後で設定
+FRONTEND_URL=$(gcloud run services describe project-progress-frontend-prod --region=asia-northeast1 --format='value(status.url)' 2>/dev/null || echo "https://placeholder.run.app")
+>>>>>>> Incoming (Background Agent changes)
+
+# 2. API をデプロイ
+gcloud run deploy project-progress-api-prod \
+  --project sandbox-471809 \
+  --region asia-northeast1 \
+  --image asia-northeast1-docker.pkg.dev/sandbox-471809/project-progress-db/api:prod-latest \
+  --platform=managed \
+  --service-account=api-sa-8fd82014@sandbox-471809.iam.gserviceaccount.com \
+  --allow-unauthenticated \
+  --cpu=1 --memory=512Mi --min-instances=1 --max-instances=10 --concurrency=80 --timeout=60s \
+  --update-env-vars=PROJECT_ID=sandbox-471809,BIGQUERY_DATASET=project_progress_db,PUBSUB_TOPIC=upload-events,ENVIRONMENT=prod,FRONTEND_URL=$FRONTEND_URL,ALLOWED_OAUTH_DOMAINS=datafluct.com,GCS_BUCKET=sandbox-471809-meeting-notes-raw \
+  --set-secrets=OAUTH_CLIENT_ID=oauth-client-id:latest,OAUTH_CLIENT_SECRET=oauth-client-secret:latest,JWT_SECRET_KEY=jwt-secret-key:latest
+```
+
+##### 2-4. Cloud Run Worker サービスのデプロイ
+
+サービス名: `project-progress-worker-prod`
+
+```bash
+gcloud run deploy project-progress-worker-prod \
+  --project sandbox-471809 \
+  --region asia-northeast1 \
+  --image asia-northeast1-docker.pkg.dev/sandbox-471809/project-progress-db/worker:prod-latest \
+  --platform=managed \
+  --service-account=worker-sa-8fd82014@sandbox-471809.iam.gserviceaccount.com \
+  --no-allow-unauthenticated \
+  --cpu=2 --memory=1Gi --min-instances=0 --max-instances=10 --timeout=300s \
+  --update-env-vars=PROJECT_ID=sandbox-471809,BIGQUERY_DATASET=project_progress_db,REGION=asia-northeast1,ENVIRONMENT=prod,GEMINI_LOCATION=us-central1,GEMINI_MODEL=gemini-2.5-pro
+```
+
+- `GEMINI_LOCATION` / `GEMINI_MODEL` は Vertex AI Gemini の利用リージョン・モデル名に合わせて調整してください  
+  （初回利用時は GCP コンソールから利用規約への同意が必要です）。
+
+##### 2-5. Cloud Run Frontend サービスのデプロイ
+
+サービス名: `project-progress-frontend-prod`
+
+> **重要**: フロントエンドは必ずAPI URLを `NEXT_PUBLIC_API_URL` 環境変数に設定してデプロイしてください。
+
+```bash
+# 1. API URLを取得
+API_URL=$(gcloud run services describe project-progress-api-prod --region=asia-northeast1 --format='value(status.url)')
+echo "Using API URL: $API_URL"
+
+# 2. Frontend をデプロイ（API URLを環境変数として設定）
+gcloud run deploy project-progress-frontend-prod \
+  --project sandbox-471809 \
+  --region asia-northeast1 \
+  --image asia-northeast1-docker.pkg.dev/sandbox-471809/project-progress-db/frontend:prod-latest \
+  --platform=managed \
+  --allow-unauthenticated \
+  --cpu=1 --memory=512Mi --min-instances=1 --max-instances=10 --timeout=60s \
+  --set-env-vars=NEXT_PUBLIC_API_URL=$API_URL
+```
+
+これらのコマンドを実行することで、**API / Worker / Frontend の本番リビジョンがすべて gcloud 経由で非対話的に更新**されます。
+
+> **注意**: `NEXT_PUBLIC_API_URL` を設定し忘れると、フロントエンドが古いAPI URLを参照してログインエラーになる可能性があります。
 
 ### OAuth認証設定（本番環境）
 

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { getRisks, getRiskStats, getProjects, exportRisks } from '../../lib/api';
+import { useState, useEffect, useCallback } from 'react';
+import { getRisks, getRiskStats, getProjects, exportRisks, Risk, Project } from '../../lib/api';
 import { toast } from '../../lib/toast';
 import AuthGuard from '../../components/AuthGuard';
 import RiskFilters from '../../components/RiskFilters';
@@ -11,18 +11,23 @@ import LoadingSpinner from '../../components/LoadingSpinner';
 import Link from 'next/link';
 
 export default function RisksPage() {
-    const [risks, setRisks] = useState<any[]>([]);
-    const [projects, setProjects] = useState<any[]>([]);
+    const [risks, setRisks] = useState<Risk[]>([]);
+    const [projects, setProjects] = useState<Project[]>([]);
     const [stats, setStats] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [filters, setFilters] = useState<any>({});
+    const [total, setTotal] = useState(0);
+    const [offset, setOffset] = useState(0);
+    const [hasMore, setHasMore] = useState(false);
+    const limit = 20;
 
     useEffect(() => {
         loadInitialData();
     }, []);
 
     useEffect(() => {
-        loadRisks();
+        setOffset(0);
+        loadRisks(true);
     }, [filters]);
 
     async function loadInitialData() {
@@ -31,7 +36,7 @@ export default function RisksPage() {
                 getProjects(),
                 getRiskStats()
             ]);
-            setProjects(projectsData);
+            setProjects(projectsData.items || projectsData);
             setStats(statsData);
         } catch (error) {
             console.error('Failed to load initial data:', error);
@@ -39,12 +44,32 @@ export default function RisksPage() {
         }
     }
 
-    async function loadRisks() {
+    async function loadRisks(reset = false) {
         setLoading(true);
         try {
             const { search, ...apiFilters } = filters;
-            const risksData = await getRisks(apiFilters);
-            setRisks(risksData);
+            const currentOffset = reset ? 0 : offset;
+            
+            // Convert single risk_level to array if needed
+            const riskLevelArray = apiFilters.risk_level 
+                ? [apiFilters.risk_level] 
+                : undefined;
+            
+            const risksData = await getRisks({
+                ...apiFilters,
+                risk_level: riskLevelArray,
+                search,
+                limit,
+                offset: currentOffset,
+            });
+            
+            if (reset) {
+                setRisks(risksData.items);
+            } else {
+                setRisks(prev => [...prev, ...risksData.items]);
+            }
+            setTotal(risksData.total);
+            setHasMore(risksData.has_more);
         } catch (error) {
             console.error('Failed to load risks:', error);
             toast.error('Failed to load risks');
@@ -57,6 +82,27 @@ export default function RisksPage() {
         const { search, ...exportFilters } = filters;
         await exportRisks(exportFilters);
     }
+
+    const handleRiskDeleted = useCallback((riskId: string) => {
+        setRisks(prev => prev.filter(r => r.risk_id !== riskId));
+        setTotal(prev => prev - 1);
+        // Refresh stats
+        getRiskStats().then(setStats).catch(console.error);
+    }, []);
+
+    const handleRiskUpdated = useCallback((updatedRisk: Risk) => {
+        setRisks(prev => prev.map(r => 
+            r.risk_id === updatedRisk.risk_id ? updatedRisk : r
+        ));
+        // Refresh stats
+        getRiskStats().then(setStats).catch(console.error);
+    }, []);
+
+    const loadMore = () => {
+        const newOffset = offset + limit;
+        setOffset(newOffset);
+        loadRisks(false);
+    };
 
     return (
         <AuthGuard>
@@ -104,16 +150,37 @@ export default function RisksPage() {
                         {/* Filters Sidebar */}
                         <div className="lg:col-span-1">
                             <RiskFilters projects={projects} onFilterChange={setFilters} />
+                            <div className="mt-4 text-sm text-gray-400">
+                                {total} 件のリスク
+                            </div>
                         </div>
 
                         {/* Risks List */}
                         <div className="lg:col-span-3">
-                            {loading ? (
+                            {loading && risks.length === 0 ? (
                                 <div className="glass p-12 rounded-xl flex justify-center">
                                     <LoadingSpinner size="large" text="リスクを読み込み中..." />
                                 </div>
                             ) : (
-                                <RiskList risks={risks} search={filters.search} />
+                                <>
+                                    <RiskList 
+                                        risks={risks} 
+                                        search={filters.search}
+                                        onRiskDeleted={handleRiskDeleted}
+                                        onRiskUpdated={handleRiskUpdated}
+                                    />
+                                    {hasMore && (
+                                        <div className="mt-6 text-center">
+                                            <button
+                                                onClick={loadMore}
+                                                disabled={loading}
+                                                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50"
+                                            >
+                                                {loading ? '読み込み中...' : 'もっと読み込む'}
+                                            </button>
+                                        </div>
+                                    )}
+                                </>
                             )}
                         </div>
                     </div>

@@ -17,18 +17,30 @@ export default function Dashboard() {
                 <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400">
                     Project Progress DB
                 </h1>
-                <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-3">
+                    <Link
+                        href="/meetings"
+                        className="px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-700 text-white font-semibold transition-colors shadow-lg shadow-cyan-500/30 text-sm"
+                    >
+                        📅 会議
+                    </Link>
+                    <Link
+                        href="/decisions"
+                        className="px-3 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-semibold transition-colors shadow-lg shadow-green-500/30 text-sm"
+                    >
+                        ✓ 決定事項
+                    </Link>
                     <Link
                         href="/risks"
-                        className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold transition-colors shadow-lg shadow-red-500/30"
+                        className="px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold transition-colors shadow-lg shadow-red-500/30 text-sm"
                     >
-                        🔴 リスクダッシュボード
+                        ⚠️ リスク
                     </Link>
                     <Link
                         href="/upload"
-                        className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-colors shadow-lg shadow-blue-500/30"
+                        className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-colors shadow-lg shadow-blue-500/30 text-sm"
                     >
-                        📤 議事録アップロード
+                        📤 アップロード
                     </Link>
                     <UserMenu />
                 </div>

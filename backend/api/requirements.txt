@@ -32,3 +32,7 @@ ruff==0.8.2
 
 # Utilities
 tenacity==9.0.0
+
+# Rate Limiting
+slowapi==0.1.9
+limits==3.13.0

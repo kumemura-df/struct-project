@@ -4,13 +4,48 @@ import os
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
+from queue import Queue
+from threading import Lock
+from contextlib import contextmanager
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "local.db")
 
+# Connection pool settings
+POOL_SIZE = 5
+_connection_pool: Queue = Queue(maxsize=POOL_SIZE)
+_pool_lock = Lock()
+_pool_initialized = False
+
+def _init_pool():
+    """Initialize the connection pool."""
+    global _pool_initialized
+    with _pool_lock:
+        if _pool_initialized:
+            return
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        for _ in range(POOL_SIZE):
+            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            _connection_pool.put(conn)
+        _pool_initialized = True
+
+
+@contextmanager
+def get_connection():
+    """Get a connection from the pool (context manager)."""
+    _init_pool()
+    conn = _connection_pool.get()
+    try:
+        _create_tables(conn)
+        yield conn
+    finally:
+        _connection_pool.put(conn)
+
+
 def _get_connection():
-    """Get SQLite connection and ensure tables exist."""
+    """Get SQLite connection and ensure tables exist (legacy support)."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     _create_tables(conn)
     return conn
@@ -30,7 +65,8 @@ def _create_tables(conn: sqlite3.Connection):
             language TEXT,
             created_at TEXT,
             status TEXT,
-            error_message TEXT
+            error_message TEXT,
+            deleted_at TEXT
         )
     """)
     
@@ -42,7 +78,8 @@ def _create_tables(conn: sqlite3.Connection):
             project_name TEXT,
             latest_meeting_id TEXT,
             created_at TEXT,
-            updated_at TEXT
+            updated_at TEXT,
+            deleted_at TEXT
         )
     """)
     
@@ -62,7 +99,8 @@ def _create_tables(conn: sqlite3.Connection):
             priority TEXT,
             created_at TEXT,
             updated_at TEXT,
-            source_sentence TEXT
+            source_sentence TEXT,
+            deleted_at TEXT
         )
     """)
     
@@ -79,7 +117,9 @@ def _create_tables(conn: sqlite3.Connection):
             impact TEXT,
             owner TEXT,
             created_at TEXT,
-            source_sentence TEXT
+            source_sentence TEXT,
+            deleted_at TEXT,
+            updated_at TEXT
         )
     """)
     
@@ -93,11 +133,76 @@ def _create_tables(conn: sqlite3.Connection):
             decision_description TEXT,
             decided_by TEXT,
             created_at TEXT,
-            source_sentence TEXT
+            source_sentence TEXT,
+            deleted_at TEXT,
+            updated_at TEXT
         )
     """)
     
+    # Audit log table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            log_id TEXT PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            old_value TEXT,
+            new_value TEXT,
+            user_id TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    
+    # Schema migrations table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL,
+            description TEXT
+        )
+    """)
+    
+    # Create indexes for performance
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_deleted ON tasks(deleted_at)")
+    
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_risks_project ON risks(project_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_risks_level ON risks(risk_level)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_risks_deleted ON risks(deleted_at)")
+    
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_deleted ON projects(deleted_at)")
+    
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_deleted ON decisions(deleted_at)")
+    
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id)")
+    
     conn.commit()
+
+
+def _add_column_if_not_exists(conn: sqlite3.Connection, table: str, column: str, column_type: str):
+    """Add a column to a table if it doesn't exist."""
+    cursor = conn.cursor()
+    cursor.execute(f"PRAGMA table_info({table})")
+    columns = [row[1] for row in cursor.fetchall()]
+    if column not in columns:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+        conn.commit()
+
+
+def _ensure_columns(conn: sqlite3.Connection):
+    """Ensure all required columns exist (for existing databases)."""
+    # Add deleted_at columns
+    _add_column_if_not_exists(conn, "meetings", "deleted_at", "TEXT")
+    _add_column_if_not_exists(conn, "projects", "deleted_at", "TEXT")
+    _add_column_if_not_exists(conn, "tasks", "deleted_at", "TEXT")
+    _add_column_if_not_exists(conn, "risks", "deleted_at", "TEXT")
+    _add_column_if_not_exists(conn, "risks", "updated_at", "TEXT")
+    _add_column_if_not_exists(conn, "decisions", "deleted_at", "TEXT")
+    _add_column_if_not_exists(conn, "decisions", "updated_at", "TEXT")
 
 def insert_meeting_metadata(meeting_data: Dict[str, Any]):
     """Insert meeting metadata."""
@@ -398,3 +503,976 @@ def save_extracted_data(meeting_id: str, extracted_data: dict):
           f"{len(extracted_data.get('tasks', []))} tasks, "
           f"{len(extracted_data.get('risks', []))} risks, "
           f"{len(extracted_data.get('decisions', []))} decisions")
+
+
+# ===== AUDIT LOG =====
+
+def _log_audit(
+    conn: sqlite3.Connection,
+    entity_type: str,
+    entity_id: str,
+    action: str,
+    old_value: Optional[Dict] = None,
+    new_value: Optional[Dict] = None,
+    user_id: Optional[str] = None
+):
+    """Log an audit entry."""
+    import uuid
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO audit_log (log_id, entity_type, entity_id, action, old_value, new_value, user_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        str(uuid.uuid4()),
+        entity_type,
+        entity_id,
+        action,
+        json.dumps(old_value) if old_value else None,
+        json.dumps(new_value) if new_value else None,
+        user_id,
+        datetime.utcnow().isoformat()
+    ))
+
+
+def get_audit_log(
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+) -> List[Dict[str, Any]]:
+    """Get audit log entries."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    where_clauses = []
+    params = []
+    
+    if entity_type:
+        where_clauses.append("entity_type = ?")
+        params.append(entity_type)
+    
+    if entity_id:
+        where_clauses.append("entity_id = ?")
+        params.append(entity_id)
+    
+    where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    
+    query = f"""
+        SELECT * FROM audit_log 
+        {where_clause}
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """
+    params.extend([limit, offset])
+    
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    result = []
+    for row in rows:
+        item = dict(row)
+        if item.get("old_value"):
+            item["old_value"] = json.loads(item["old_value"])
+        if item.get("new_value"):
+            item["new_value"] = json.loads(item["new_value"])
+        result.append(item)
+    
+    return result
+
+
+# ===== SINGLE RECORD GET =====
+
+def get_task(task_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single task by ID."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tasks WHERE task_id = ? AND deleted_at IS NULL", (task_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_risk(risk_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single risk by ID."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM risks WHERE risk_id = ? AND deleted_at IS NULL", (risk_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_project(project_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single project by ID."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM projects WHERE project_id = ? AND deleted_at IS NULL", (project_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_decision(decision_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single decision by ID."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM decisions WHERE decision_id = ? AND deleted_at IS NULL", (decision_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+# ===== UPDATE FUNCTIONS =====
+
+def update_task(task_id: str, updates: Dict[str, Any], user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Update a task."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    # Get current values for audit log
+    cursor.execute("SELECT * FROM tasks WHERE task_id = ? AND deleted_at IS NULL", (task_id,))
+    old_row = cursor.fetchone()
+    if not old_row:
+        conn.close()
+        return None
+    
+    old_value = dict(old_row)
+    
+    # Build update query
+    update_fields = []
+    params = []
+    
+    allowed_fields = ["task_title", "task_description", "owner", "due_date", "status", "priority"]
+    for field in allowed_fields:
+        if field in updates and updates[field] is not None:
+            update_fields.append(f"{field} = ?")
+            params.append(str(updates[field]) if updates[field] else None)
+    
+    if not update_fields:
+        conn.close()
+        return old_value
+    
+    update_fields.append("updated_at = ?")
+    params.append(datetime.utcnow().isoformat())
+    params.append(task_id)
+    
+    query = f"UPDATE tasks SET {', '.join(update_fields)} WHERE task_id = ?"
+    cursor.execute(query, params)
+    
+    # Log audit
+    _log_audit(conn, "task", task_id, "UPDATE", old_value, updates, user_id)
+    
+    conn.commit()
+    
+    # Return updated record
+    cursor.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_risk(risk_id: str, updates: Dict[str, Any], user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Update a risk."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    # Get current values for audit log
+    cursor.execute("SELECT * FROM risks WHERE risk_id = ? AND deleted_at IS NULL", (risk_id,))
+    old_row = cursor.fetchone()
+    if not old_row:
+        conn.close()
+        return None
+    
+    old_value = dict(old_row)
+    
+    # Build update query
+    update_fields = []
+    params = []
+    
+    allowed_fields = ["risk_description", "risk_level", "owner"]
+    for field in allowed_fields:
+        if field in updates and updates[field] is not None:
+            update_fields.append(f"{field} = ?")
+            params.append(str(updates[field]) if updates[field] else None)
+    
+    if not update_fields:
+        conn.close()
+        return old_value
+    
+    update_fields.append("updated_at = ?")
+    params.append(datetime.utcnow().isoformat())
+    params.append(risk_id)
+    
+    query = f"UPDATE risks SET {', '.join(update_fields)} WHERE risk_id = ?"
+    cursor.execute(query, params)
+    
+    # Log audit
+    _log_audit(conn, "risk", risk_id, "UPDATE", old_value, updates, user_id)
+    
+    conn.commit()
+    
+    # Return updated record
+    cursor.execute("SELECT * FROM risks WHERE risk_id = ?", (risk_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_project(project_id: str, updates: Dict[str, Any], user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Update a project."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    # Get current values for audit log
+    cursor.execute("SELECT * FROM projects WHERE project_id = ? AND deleted_at IS NULL", (project_id,))
+    old_row = cursor.fetchone()
+    if not old_row:
+        conn.close()
+        return None
+    
+    old_value = dict(old_row)
+    
+    # Build update query
+    update_fields = []
+    params = []
+    
+    allowed_fields = ["project_name"]
+    for field in allowed_fields:
+        if field in updates and updates[field] is not None:
+            update_fields.append(f"{field} = ?")
+            params.append(str(updates[field]) if updates[field] else None)
+    
+    if not update_fields:
+        conn.close()
+        return old_value
+    
+    update_fields.append("updated_at = ?")
+    params.append(datetime.utcnow().isoformat())
+    params.append(project_id)
+    
+    query = f"UPDATE projects SET {', '.join(update_fields)} WHERE project_id = ?"
+    cursor.execute(query, params)
+    
+    # Log audit
+    _log_audit(conn, "project", project_id, "UPDATE", old_value, updates, user_id)
+    
+    conn.commit()
+    
+    # Return updated record
+    cursor.execute("SELECT * FROM projects WHERE project_id = ?", (project_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_decision(decision_id: str, updates: Dict[str, Any], user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Update a decision."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    # Get current values for audit log
+    cursor.execute("SELECT * FROM decisions WHERE decision_id = ? AND deleted_at IS NULL", (decision_id,))
+    old_row = cursor.fetchone()
+    if not old_row:
+        conn.close()
+        return None
+    
+    old_value = dict(old_row)
+    
+    # Build update query
+    update_fields = []
+    params = []
+    
+    allowed_fields = ["decision_description", "decided_by"]
+    for field in allowed_fields:
+        if field in updates and updates[field] is not None:
+            update_fields.append(f"{field} = ?")
+            params.append(str(updates[field]) if updates[field] else None)
+    
+    if not update_fields:
+        conn.close()
+        return old_value
+    
+    update_fields.append("updated_at = ?")
+    params.append(datetime.utcnow().isoformat())
+    params.append(decision_id)
+    
+    query = f"UPDATE decisions SET {', '.join(update_fields)} WHERE decision_id = ?"
+    cursor.execute(query, params)
+    
+    # Log audit
+    _log_audit(conn, "decision", decision_id, "UPDATE", old_value, updates, user_id)
+    
+    conn.commit()
+    
+    # Return updated record
+    cursor.execute("SELECT * FROM decisions WHERE decision_id = ?", (decision_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+# ===== DELETE FUNCTIONS (Soft Delete) =====
+
+def delete_task(task_id: str, user_id: Optional[str] = None) -> bool:
+    """Soft delete a task."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    # Get current values for audit log
+    cursor.execute("SELECT * FROM tasks WHERE task_id = ? AND deleted_at IS NULL", (task_id,))
+    old_row = cursor.fetchone()
+    if not old_row:
+        conn.close()
+        return False
+    
+    old_value = dict(old_row)
+    
+    # Soft delete
+    cursor.execute(
+        "UPDATE tasks SET deleted_at = ? WHERE task_id = ?",
+        (datetime.utcnow().isoformat(), task_id)
+    )
+    
+    # Log audit
+    _log_audit(conn, "task", task_id, "DELETE", old_value, None, user_id)
+    
+    conn.commit()
+    conn.close()
+    return True
+
+
+def delete_risk(risk_id: str, user_id: Optional[str] = None) -> bool:
+    """Soft delete a risk."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    # Get current values for audit log
+    cursor.execute("SELECT * FROM risks WHERE risk_id = ? AND deleted_at IS NULL", (risk_id,))
+    old_row = cursor.fetchone()
+    if not old_row:
+        conn.close()
+        return False
+    
+    old_value = dict(old_row)
+    
+    # Soft delete
+    cursor.execute(
+        "UPDATE risks SET deleted_at = ? WHERE risk_id = ?",
+        (datetime.utcnow().isoformat(), risk_id)
+    )
+    
+    # Log audit
+    _log_audit(conn, "risk", risk_id, "DELETE", old_value, None, user_id)
+    
+    conn.commit()
+    conn.close()
+    return True
+
+
+def delete_project(project_id: str, user_id: Optional[str] = None) -> bool:
+    """Soft delete a project."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    # Get current values for audit log
+    cursor.execute("SELECT * FROM projects WHERE project_id = ? AND deleted_at IS NULL", (project_id,))
+    old_row = cursor.fetchone()
+    if not old_row:
+        conn.close()
+        return False
+    
+    old_value = dict(old_row)
+    
+    # Soft delete
+    cursor.execute(
+        "UPDATE projects SET deleted_at = ? WHERE project_id = ?",
+        (datetime.utcnow().isoformat(), project_id)
+    )
+    
+    # Log audit
+    _log_audit(conn, "project", project_id, "DELETE", old_value, None, user_id)
+    
+    conn.commit()
+    conn.close()
+    return True
+
+
+def delete_decision(decision_id: str, user_id: Optional[str] = None) -> bool:
+    """Soft delete a decision."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    # Get current values for audit log
+    cursor.execute("SELECT * FROM decisions WHERE decision_id = ? AND deleted_at IS NULL", (decision_id,))
+    old_row = cursor.fetchone()
+    if not old_row:
+        conn.close()
+        return False
+    
+    old_value = dict(old_row)
+    
+    # Soft delete
+    cursor.execute(
+        "UPDATE decisions SET deleted_at = ? WHERE decision_id = ?",
+        (datetime.utcnow().isoformat(), decision_id)
+    )
+    
+    # Log audit
+    _log_audit(conn, "decision", decision_id, "DELETE", old_value, None, user_id)
+    
+    conn.commit()
+    conn.close()
+    return True
+
+
+# ===== RESTORE FUNCTIONS =====
+
+def restore_task(task_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Restore a soft-deleted task."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM tasks WHERE task_id = ? AND deleted_at IS NOT NULL", (task_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return None
+    
+    cursor.execute(
+        "UPDATE tasks SET deleted_at = NULL, updated_at = ? WHERE task_id = ?",
+        (datetime.utcnow().isoformat(), task_id)
+    )
+    
+    _log_audit(conn, "task", task_id, "RESTORE", None, None, user_id)
+    
+    conn.commit()
+    cursor.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+# ===== ADVANCED LIST WITH PAGINATION, SEARCH, SORT =====
+
+def list_tasks_paginated(
+    project_id: Optional[str] = None,
+    status: Optional[List[str]] = None,
+    priority: Optional[List[str]] = None,
+    owner: Optional[str] = None,
+    due_date_from: Optional[str] = None,
+    due_date_to: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: str = "due_date",
+    sort_order: str = "asc",
+    limit: int = 20,
+    offset: int = 0
+) -> Dict[str, Any]:
+    """List tasks with pagination, filtering, search, and sorting."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    where_clauses = ["deleted_at IS NULL"]
+    params = []
+    
+    if project_id:
+        where_clauses.append("project_id = ?")
+        params.append(project_id)
+    
+    if status:
+        placeholders = ",".join("?" * len(status))
+        where_clauses.append(f"status IN ({placeholders})")
+        params.extend(status)
+    
+    if priority:
+        placeholders = ",".join("?" * len(priority))
+        where_clauses.append(f"priority IN ({placeholders})")
+        params.extend(priority)
+    
+    if owner:
+        where_clauses.append("owner LIKE ?")
+        params.append(f"%{owner}%")
+    
+    if due_date_from:
+        where_clauses.append("due_date >= ?")
+        params.append(due_date_from)
+    
+    if due_date_to:
+        where_clauses.append("due_date <= ?")
+        params.append(due_date_to)
+    
+    if search:
+        where_clauses.append("(task_title LIKE ? OR task_description LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    
+    where_clause = f"WHERE {' AND '.join(where_clauses)}"
+    
+    # Validate sort_by
+    allowed_sort = ["due_date", "created_at", "updated_at", "priority", "status", "task_title"]
+    if sort_by not in allowed_sort:
+        sort_by = "due_date"
+    
+    sort_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
+    
+    # Get total count
+    count_query = f"SELECT COUNT(*) as total FROM tasks {where_clause}"
+    cursor.execute(count_query, params)
+    total = cursor.fetchone()["total"]
+    
+    # Get items
+    query = f"""
+        SELECT * FROM tasks 
+        {where_clause}
+        ORDER BY {sort_by} {sort_direction}
+        LIMIT ? OFFSET ?
+    """
+    params.extend([limit, offset])
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return {
+        "items": [dict(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < total
+    }
+
+
+def list_risks_paginated(
+    project_id: Optional[str] = None,
+    meeting_id: Optional[str] = None,
+    risk_level: Optional[List[str]] = None,
+    owner: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    limit: int = 20,
+    offset: int = 0
+) -> Dict[str, Any]:
+    """List risks with pagination, filtering, search, and sorting."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    where_clauses = ["deleted_at IS NULL"]
+    params = []
+    
+    if project_id:
+        where_clauses.append("project_id = ?")
+        params.append(project_id)
+    
+    if meeting_id:
+        where_clauses.append("meeting_id = ?")
+        params.append(meeting_id)
+    
+    if risk_level:
+        placeholders = ",".join("?" * len(risk_level))
+        where_clauses.append(f"risk_level IN ({placeholders})")
+        params.extend(risk_level)
+    
+    if owner:
+        where_clauses.append("owner LIKE ?")
+        params.append(f"%{owner}%")
+    
+    if search:
+        where_clauses.append("risk_description LIKE ?")
+        params.append(f"%{search}%")
+    
+    where_clause = f"WHERE {' AND '.join(where_clauses)}"
+    
+    # Validate sort_by
+    allowed_sort = ["created_at", "updated_at", "risk_level"]
+    if sort_by not in allowed_sort:
+        sort_by = "created_at"
+    
+    sort_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
+    
+    # Get total count
+    count_query = f"SELECT COUNT(*) as total FROM risks {where_clause}"
+    cursor.execute(count_query, params)
+    total = cursor.fetchone()["total"]
+    
+    # Get items
+    query = f"""
+        SELECT * FROM risks 
+        {where_clause}
+        ORDER BY {sort_by} {sort_direction}
+        LIMIT ? OFFSET ?
+    """
+    params.extend([limit, offset])
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return {
+        "items": [dict(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < total
+    }
+
+
+def list_projects_paginated(
+    search: Optional[str] = None,
+    sort_by: str = "updated_at",
+    sort_order: str = "desc",
+    limit: int = 20,
+    offset: int = 0
+) -> Dict[str, Any]:
+    """List projects with pagination, search, and sorting."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    where_clauses = ["deleted_at IS NULL"]
+    params = []
+    
+    if search:
+        where_clauses.append("project_name LIKE ?")
+        params.append(f"%{search}%")
+    
+    where_clause = f"WHERE {' AND '.join(where_clauses)}"
+    
+    # Validate sort_by
+    allowed_sort = ["created_at", "updated_at", "project_name"]
+    if sort_by not in allowed_sort:
+        sort_by = "updated_at"
+    
+    sort_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
+    
+    # Get total count
+    count_query = f"SELECT COUNT(*) as total FROM projects {where_clause}"
+    cursor.execute(count_query, params)
+    total = cursor.fetchone()["total"]
+    
+    # Get items
+    query = f"""
+        SELECT * FROM projects 
+        {where_clause}
+        ORDER BY {sort_by} {sort_direction}
+        LIMIT ? OFFSET ?
+    """
+    params.extend([limit, offset])
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return {
+        "items": [dict(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < total
+    }
+
+
+def list_decisions_paginated(
+    project_id: Optional[str] = None,
+    meeting_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    limit: int = 20,
+    offset: int = 0
+) -> Dict[str, Any]:
+    """List decisions with pagination, filtering, search, and sorting."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    where_clauses = ["deleted_at IS NULL"]
+    params = []
+    
+    if project_id:
+        where_clauses.append("project_id = ?")
+        params.append(project_id)
+    
+    if meeting_id:
+        where_clauses.append("meeting_id = ?")
+        params.append(meeting_id)
+    
+    if search:
+        where_clauses.append("decision_description LIKE ?")
+        params.append(f"%{search}%")
+    
+    where_clause = f"WHERE {' AND '.join(where_clauses)}"
+    
+    # Validate sort_by
+    allowed_sort = ["created_at", "updated_at"]
+    if sort_by not in allowed_sort:
+        sort_by = "created_at"
+    
+    sort_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
+    
+    # Get total count
+    count_query = f"SELECT COUNT(*) as total FROM decisions {where_clause}"
+    cursor.execute(count_query, params)
+    total = cursor.fetchone()["total"]
+    
+    # Get items
+    query = f"""
+        SELECT * FROM decisions 
+        {where_clause}
+        ORDER BY {sort_by} {sort_direction}
+        LIMIT ? OFFSET ?
+    """
+    params.extend([limit, offset])
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return {
+        "items": [dict(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < total
+    }
+
+
+# ===== SEARCH FUNCTIONS =====
+
+def search_all(
+    query: str,
+    limit: int = 20
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Search across all entities."""
+    conn = _get_connection()
+    _ensure_columns(conn)
+    cursor = conn.cursor()
+    
+    search_term = f"%{query}%"
+    
+    # Search tasks
+    cursor.execute("""
+        SELECT 'task' as entity_type, task_id as id, task_title as title, task_description as description
+        FROM tasks WHERE deleted_at IS NULL AND (task_title LIKE ? OR task_description LIKE ?)
+        LIMIT ?
+    """, (search_term, search_term, limit))
+    tasks = [dict(row) for row in cursor.fetchall()]
+    
+    # Search risks
+    cursor.execute("""
+        SELECT 'risk' as entity_type, risk_id as id, risk_description as title, risk_description as description
+        FROM risks WHERE deleted_at IS NULL AND risk_description LIKE ?
+        LIMIT ?
+    """, (search_term, limit))
+    risks = [dict(row) for row in cursor.fetchall()]
+    
+    # Search projects
+    cursor.execute("""
+        SELECT 'project' as entity_type, project_id as id, project_name as title, project_name as description
+        FROM projects WHERE deleted_at IS NULL AND project_name LIKE ?
+        LIMIT ?
+    """, (search_term, limit))
+    projects = [dict(row) for row in cursor.fetchall()]
+    
+    # Search decisions
+    cursor.execute("""
+        SELECT 'decision' as entity_type, decision_id as id, decision_description as title, decision_description as description
+        FROM decisions WHERE deleted_at IS NULL AND decision_description LIKE ?
+        LIMIT ?
+    """, (search_term, limit))
+    decisions = [dict(row) for row in cursor.fetchall()]
+    
+    conn.close()
+    
+    return {
+        "tasks": tasks,
+        "risks": risks,
+        "projects": projects,
+        "decisions": decisions
+    }
+
+
+# ===== MIGRATION HELPERS =====
+
+def get_schema_version() -> int:
+    """Get current schema version."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT MAX(version) as version FROM schema_migrations")
+        row = cursor.fetchone()
+        conn.close()
+        return row["version"] if row and row["version"] else 0
+    except:
+        conn.close()
+        return 0
+
+
+def set_schema_version(version: int, description: str = ""):
+    """Set schema version."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO schema_migrations (version, applied_at, description)
+        VALUES (?, ?, ?)
+    """, (version, datetime.utcnow().isoformat(), description))
+    conn.commit()
+    conn.close()
+
+
+# ===== MEETINGS LIST =====
+
+def list_meetings_paginated(
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    limit: int = 20,
+    offset: int = 0
+) -> Dict[str, Any]:
+    """List meetings with pagination, filtering, search, and sorting."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    where_clauses = ["deleted_at IS NULL"]
+    params = []
+    
+    if status:
+        where_clauses.append("status = ?")
+        params.append(status)
+    
+    if search:
+        where_clauses.append("(title LIKE ? OR meeting_id LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    
+    where_clause = f"WHERE {' AND '.join(where_clauses)}"
+    
+    # Validate sort_by
+    allowed_sort = ["created_at", "meeting_date", "title", "status"]
+    if sort_by not in allowed_sort:
+        sort_by = "created_at"
+    
+    sort_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
+    
+    # Get total count
+    count_query = f"SELECT COUNT(*) as total FROM meetings {where_clause}"
+    cursor.execute(count_query, params)
+    total = cursor.fetchone()["total"]
+    
+    # Get items with extraction counts
+    query = f"""
+        SELECT 
+            m.*,
+            (SELECT COUNT(*) FROM tasks t WHERE t.meeting_id = m.meeting_id AND t.deleted_at IS NULL) as task_count,
+            (SELECT COUNT(*) FROM risks r WHERE r.meeting_id = m.meeting_id AND r.deleted_at IS NULL) as risk_count,
+            (SELECT COUNT(*) FROM decisions d WHERE d.meeting_id = m.meeting_id AND d.deleted_at IS NULL) as decision_count
+        FROM meetings m
+        {where_clause}
+        ORDER BY {sort_by} {sort_direction}
+        LIMIT ? OFFSET ?
+    """
+    params.extend([limit, offset])
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return {
+        "items": [dict(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < total
+    }
+
+
+def get_meeting(meeting_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single meeting by ID with extraction counts."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT 
+            m.*,
+            (SELECT COUNT(*) FROM tasks t WHERE t.meeting_id = m.meeting_id AND t.deleted_at IS NULL) as task_count,
+            (SELECT COUNT(*) FROM risks r WHERE r.meeting_id = m.meeting_id AND r.deleted_at IS NULL) as risk_count,
+            (SELECT COUNT(*) FROM decisions d WHERE d.meeting_id = m.meeting_id AND d.deleted_at IS NULL) as decision_count
+        FROM meetings m
+        WHERE m.meeting_id = ? AND m.deleted_at IS NULL
+    """, (meeting_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+# ===== PROJECT STATS =====
+
+def get_project_stats(project_id: str) -> Optional[Dict[str, Any]]:
+    """Get statistics for a specific project."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    # Check if project exists
+    cursor.execute("SELECT * FROM projects WHERE project_id = ? AND deleted_at IS NULL", (project_id,))
+    project = cursor.fetchone()
+    if not project:
+        conn.close()
+        return None
+    
+    # Total tasks
+    cursor.execute("""
+        SELECT COUNT(*) as total FROM tasks 
+        WHERE project_id = ? AND deleted_at IS NULL
+    """, (project_id,))
+    total_tasks = cursor.fetchone()["total"]
+    
+    # Incomplete tasks (not DONE)
+    cursor.execute("""
+        SELECT COUNT(*) as count FROM tasks 
+        WHERE project_id = ? AND deleted_at IS NULL AND status != 'DONE'
+    """, (project_id,))
+    incomplete_tasks = cursor.fetchone()["count"]
+    
+    # Overdue tasks
+    cursor.execute("""
+        SELECT COUNT(*) as count FROM tasks 
+        WHERE project_id = ? AND deleted_at IS NULL 
+        AND status != 'DONE' 
+        AND due_date IS NOT NULL 
+        AND due_date < date('now')
+    """, (project_id,))
+    overdue_tasks = cursor.fetchone()["count"]
+    
+    # Risk count by level
+    cursor.execute("""
+        SELECT risk_level, COUNT(*) as count FROM risks 
+        WHERE project_id = ? AND deleted_at IS NULL
+        GROUP BY risk_level
+    """, (project_id,))
+    risks_by_level = {row["risk_level"]: row["count"] for row in cursor.fetchall()}
+    
+    # Total risks
+    total_risks = sum(risks_by_level.values())
+    
+    # Decision count
+    cursor.execute("""
+        SELECT COUNT(*) as count FROM decisions 
+        WHERE project_id = ? AND deleted_at IS NULL
+    """, (project_id,))
+    total_decisions = cursor.fetchone()["count"]
+    
+    conn.close()
+    
+    return {
+        "project_id": project_id,
+        "total_tasks": total_tasks,
+        "incomplete_tasks": incomplete_tasks,
+        "overdue_tasks": overdue_tasks,
+        "total_risks": total_risks,
+        "risks_by_level": risks_by_level,
+        "total_decisions": total_decisions,
+    }
