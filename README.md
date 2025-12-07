@@ -477,18 +477,8 @@ gcloud builds submit frontend \
 サービス名: `project-progress-api-prod`
 
 ```bash
-<<<<<<< Current (Your changes)
-<<<<<<< Current (Your changes)
 # 1. まずFrontend URLを取得（既にデプロイ済みの場合）または後で設定
 FRONTEND_URL=$(gcloud run services describe project-progress-frontend-prod --region=asia-northeast1 --format='value(status.url)' 2>/dev/null || echo "https://placeholder.run.app")
-=======
-# 1. 本番 Frontend URL を明示的に設定
-FRONTEND_URL=https://project-progress-frontend-prod-52e5pqzdua-an.a.run.app
->>>>>>> Incoming (Background Agent changes)
-=======
-# 1. まずFrontend URLを取得（既にデプロイ済みの場合）または後で設定
-FRONTEND_URL=$(gcloud run services describe project-progress-frontend-prod --region=asia-northeast1 --format='value(status.url)' 2>/dev/null || echo "https://placeholder.run.app")
->>>>>>> Incoming (Background Agent changes)
 
 # 2. API をデプロイ
 gcloud run deploy project-progress-api-prod \
