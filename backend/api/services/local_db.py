@@ -162,6 +162,33 @@ def _create_tables(conn: sqlite3.Connection):
         )
     """)
     
+    # Task history table (for diff detection)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS task_history (
+            history_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            meeting_id TEXT,
+            field_changed TEXT NOT NULL,
+            old_value TEXT,
+            new_value TEXT,
+            changed_at TEXT NOT NULL,
+            changed_by TEXT
+        )
+    """)
+    
+    # Risk history table (for diff detection)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS risk_history (
+            history_id TEXT PRIMARY KEY,
+            risk_id TEXT NOT NULL,
+            meeting_id TEXT,
+            old_level TEXT,
+            new_level TEXT,
+            changed_at TEXT NOT NULL,
+            changed_by TEXT
+        )
+    """)
+    
     # Create indexes for performance
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)")
@@ -179,6 +206,14 @@ def _create_tables(conn: sqlite3.Connection):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_deleted ON decisions(deleted_at)")
     
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id)")
+    
+    # Indexes for history tables
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_history_task ON task_history(task_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_history_meeting ON task_history(meeting_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_history_changed ON task_history(changed_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_history_risk ON risk_history(risk_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_history_meeting ON risk_history(meeting_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_history_changed ON risk_history(changed_at)")
     
     conn.commit()
 
@@ -1605,3 +1640,292 @@ def get_recent_decisions(start_date: str, end_date: str, limit: int = 10) -> Lis
     conn.close()
     
     return [dict(row) for row in rows]
+
+
+# ===== HISTORY TRACKING FOR DIFF DETECTION =====
+
+def record_task_history(
+    task_id: str,
+    field_changed: str,
+    old_value: Optional[str],
+    new_value: Optional[str],
+    meeting_id: Optional[str] = None,
+    changed_by: Optional[str] = None
+):
+    """Record a task change in history."""
+    import uuid
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO task_history (history_id, task_id, meeting_id, field_changed, old_value, new_value, changed_at, changed_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        str(uuid.uuid4()),
+        task_id,
+        meeting_id,
+        field_changed,
+        old_value,
+        new_value,
+        datetime.utcnow().isoformat(),
+        changed_by
+    ))
+    
+    conn.commit()
+    conn.close()
+
+
+def record_risk_history(
+    risk_id: str,
+    old_level: Optional[str],
+    new_level: Optional[str],
+    meeting_id: Optional[str] = None,
+    changed_by: Optional[str] = None
+):
+    """Record a risk level change in history."""
+    import uuid
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO risk_history (history_id, risk_id, meeting_id, old_level, new_level, changed_at, changed_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        str(uuid.uuid4()),
+        risk_id,
+        meeting_id,
+        old_level,
+        new_level,
+        datetime.utcnow().isoformat(),
+        changed_by
+    ))
+    
+    conn.commit()
+    conn.close()
+
+
+def get_task_history(task_id: str) -> List[Dict[str, Any]]:
+    """Get history of changes for a task."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT * FROM task_history
+        WHERE task_id = ?
+        ORDER BY changed_at DESC
+    """, (task_id,))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [dict(row) for row in rows]
+
+
+def get_risk_history(risk_id: str) -> List[Dict[str, Any]]:
+    """Get history of level changes for a risk."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT * FROM risk_history
+        WHERE risk_id = ?
+        ORDER BY changed_at DESC
+    """, (risk_id,))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [dict(row) for row in rows]
+
+
+# ===== DIFF DETECTION FUNCTIONS =====
+
+def get_new_tasks_since_meeting(meeting_id: str) -> List[Dict[str, Any]]:
+    """Get tasks created after the given meeting."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    # Get meeting date
+    cursor.execute("SELECT created_at FROM meetings WHERE meeting_id = ?", (meeting_id,))
+    meeting_row = cursor.fetchone()
+    if not meeting_row:
+        conn.close()
+        return []
+    
+    meeting_date = meeting_row["created_at"]
+    
+    # Get tasks created after this meeting
+    cursor.execute("""
+        SELECT t.*, p.project_name
+        FROM tasks t
+        LEFT JOIN projects p ON t.project_id = p.project_id
+        WHERE t.deleted_at IS NULL AND t.created_at > ?
+        ORDER BY t.created_at DESC
+    """, (meeting_date,))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [dict(row) for row in rows]
+
+
+def get_status_changes_since_meeting(meeting_id: str) -> List[Dict[str, Any]]:
+    """Get task status changes since the given meeting."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    # Get meeting date
+    cursor.execute("SELECT created_at FROM meetings WHERE meeting_id = ?", (meeting_id,))
+    meeting_row = cursor.fetchone()
+    if not meeting_row:
+        conn.close()
+        return []
+    
+    meeting_date = meeting_row["created_at"]
+    
+    # Get status changes from task_history
+    cursor.execute("""
+        SELECT 
+            h.*,
+            t.task_title,
+            t.owner,
+            p.project_name
+        FROM task_history h
+        JOIN tasks t ON h.task_id = t.task_id
+        LEFT JOIN projects p ON t.project_id = p.project_id
+        WHERE h.field_changed = 'status' AND h.changed_at > ?
+        ORDER BY h.changed_at DESC
+    """, (meeting_date,))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [dict(row) for row in rows]
+
+
+def get_escalated_risks_since_meeting(meeting_id: str) -> List[Dict[str, Any]]:
+    """Get risks that escalated (LOW->MEDIUM, MEDIUM->HIGH, etc.) since the given meeting."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    # Get meeting date
+    cursor.execute("SELECT created_at FROM meetings WHERE meeting_id = ?", (meeting_id,))
+    meeting_row = cursor.fetchone()
+    if not meeting_row:
+        conn.close()
+        return []
+    
+    meeting_date = meeting_row["created_at"]
+    
+    # Get risk level changes (escalations only)
+    cursor.execute("""
+        SELECT 
+            h.*,
+            r.risk_description,
+            r.owner,
+            p.project_name
+        FROM risk_history h
+        JOIN risks r ON h.risk_id = r.risk_id
+        LEFT JOIN projects p ON r.project_id = p.project_id
+        WHERE h.changed_at > ?
+        AND (
+            (h.old_level = 'LOW' AND h.new_level IN ('MEDIUM', 'HIGH'))
+            OR (h.old_level = 'MEDIUM' AND h.new_level = 'HIGH')
+        )
+        ORDER BY h.changed_at DESC
+    """, (meeting_date,))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [dict(row) for row in rows]
+
+
+def get_task_lifecycle(task_id: str) -> Dict[str, Any]:
+    """Get complete lifecycle of a task from creation to current state."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    # Get task details
+    cursor.execute("""
+        SELECT t.*, p.project_name, m.title as meeting_title, m.meeting_date
+        FROM tasks t
+        LEFT JOIN projects p ON t.project_id = p.project_id
+        LEFT JOIN meetings m ON t.meeting_id = m.meeting_id
+        WHERE t.task_id = ?
+    """, (task_id,))
+    
+    task_row = cursor.fetchone()
+    if not task_row:
+        conn.close()
+        return {}
+    
+    task = dict(task_row)
+    
+    # Get all history
+    cursor.execute("""
+        SELECT * FROM task_history
+        WHERE task_id = ?
+        ORDER BY changed_at ASC
+    """, (task_id,))
+    
+    history = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    
+    # Build timeline
+    timeline = [
+        {
+            "event": "created",
+            "timestamp": task["created_at"],
+            "details": f"タスク「{task['task_title']}」が作成されました",
+            "meeting_title": task.get("meeting_title")
+        }
+    ]
+    
+    for h in history:
+        if h["field_changed"] == "status":
+            timeline.append({
+                "event": "status_change",
+                "timestamp": h["changed_at"],
+                "details": f"ステータスが {h['old_value']} から {h['new_value']} に変更",
+                "old_value": h["old_value"],
+                "new_value": h["new_value"]
+            })
+        else:
+            timeline.append({
+                "event": "update",
+                "timestamp": h["changed_at"],
+                "details": f"{h['field_changed']} が変更されました",
+                "field": h["field_changed"],
+                "old_value": h["old_value"],
+                "new_value": h["new_value"]
+            })
+    
+    return {
+        "task": task,
+        "timeline": timeline,
+        "history_count": len(history)
+    }
+
+
+def get_meeting_diff_summary(meeting_id: str) -> Dict[str, Any]:
+    """Get a summary of all changes since a meeting."""
+    new_tasks = get_new_tasks_since_meeting(meeting_id)
+    status_changes = get_status_changes_since_meeting(meeting_id)
+    escalated_risks = get_escalated_risks_since_meeting(meeting_id)
+    
+    return {
+        "meeting_id": meeting_id,
+        "new_tasks": {
+            "count": len(new_tasks),
+            "items": new_tasks[:10]  # Limit to 10
+        },
+        "status_changes": {
+            "count": len(status_changes),
+            "items": status_changes[:10]
+        },
+        "escalated_risks": {
+            "count": len(escalated_risks),
+            "items": escalated_risks[:10]
+        }
+    }

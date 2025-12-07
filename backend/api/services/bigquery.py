@@ -1114,3 +1114,115 @@ def get_recent_decisions(start_date: str, end_date: str, limit: int = 10) -> Lis
     result = client.query(query, job_config=job_config)
     
     return [dict(row) for row in result]
+
+
+# ===== DIFF DETECTION FUNCTIONS =====
+
+def get_meeting_diff_summary(meeting_id: str) -> Dict[str, Any]:
+    """Get summary of changes since a meeting."""
+    if USE_LOCAL_DB:
+        return local_db.get_meeting_diff_summary(meeting_id)
+    
+    # For BigQuery, return empty as history tables not implemented
+    return {
+        "meeting_id": meeting_id,
+        "new_tasks": {"count": 0, "items": []},
+        "status_changes": {"count": 0, "items": []},
+        "escalated_risks": {"count": 0, "items": []}
+    }
+
+
+def get_new_tasks_since_meeting(meeting_id: str) -> List[Dict[str, Any]]:
+    """Get tasks created after the given meeting."""
+    if USE_LOCAL_DB:
+        return local_db.get_new_tasks_since_meeting(meeting_id)
+    return []
+
+
+def get_new_tasks_since_date(since_date: str) -> List[Dict[str, Any]]:
+    """Get tasks created after the given date."""
+    if USE_LOCAL_DB:
+        conn = local_db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT t.*, p.project_name
+            FROM tasks t
+            LEFT JOIN projects p ON t.project_id = p.project_id
+            WHERE t.deleted_at IS NULL AND t.created_at > ?
+            ORDER BY t.created_at DESC
+        """, (since_date,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    return []
+
+
+def get_status_changes_since_meeting(meeting_id: str) -> List[Dict[str, Any]]:
+    """Get task status changes since the given meeting."""
+    if USE_LOCAL_DB:
+        return local_db.get_status_changes_since_meeting(meeting_id)
+    return []
+
+
+def get_status_changes_since_date(since_date: str) -> List[Dict[str, Any]]:
+    """Get task status changes since the given date."""
+    if USE_LOCAL_DB:
+        conn = local_db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                h.*,
+                t.task_title,
+                t.owner,
+                p.project_name
+            FROM task_history h
+            JOIN tasks t ON h.task_id = t.task_id
+            LEFT JOIN projects p ON t.project_id = p.project_id
+            WHERE h.field_changed = 'status' AND h.changed_at > ?
+            ORDER BY h.changed_at DESC
+        """, (since_date,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    return []
+
+
+def get_escalated_risks_since_meeting(meeting_id: str) -> List[Dict[str, Any]]:
+    """Get risks that escalated since the given meeting."""
+    if USE_LOCAL_DB:
+        return local_db.get_escalated_risks_since_meeting(meeting_id)
+    return []
+
+
+def get_escalated_risks_since_date(since_date: str) -> List[Dict[str, Any]]:
+    """Get risks that escalated since the given date."""
+    if USE_LOCAL_DB:
+        conn = local_db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                h.*,
+                r.risk_description,
+                r.owner,
+                p.project_name
+            FROM risk_history h
+            JOIN risks r ON h.risk_id = r.risk_id
+            LEFT JOIN projects p ON r.project_id = p.project_id
+            WHERE h.changed_at > ?
+            AND (
+                (h.old_level = 'LOW' AND h.new_level IN ('MEDIUM', 'HIGH'))
+                OR (h.old_level = 'MEDIUM' AND h.new_level = 'HIGH')
+            )
+            ORDER BY h.changed_at DESC
+        """, (since_date,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    return []
+
+
+def get_task_lifecycle(task_id: str) -> Dict[str, Any]:
+    """Get complete lifecycle of a task."""
+    if USE_LOCAL_DB:
+        return local_db.get_task_lifecycle(task_id)
+    return {}

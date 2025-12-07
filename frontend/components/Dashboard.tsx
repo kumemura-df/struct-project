@@ -66,6 +66,18 @@ export default function Dashboard() {
                         ⚠️ リスク
                     </Link>
                     <Link
+                        href="/diff"
+                        className="px-3 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-semibold transition-colors shadow-lg shadow-teal-500/30 text-sm"
+                    >
+                        🔄 差分
+                    </Link>
+                    <Link
+                        href="/settings/integrations"
+                        className="px-3 py-2 rounded-lg bg-gray-600 hover:bg-gray-700 text-white font-semibold transition-colors text-sm"
+                    >
+                        🔗 連携
+                    </Link>
+                    <Link
                         href="/upload"
                         className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-colors shadow-lg shadow-blue-500/30 text-sm"
                     >
