@@ -281,7 +281,7 @@ def health_check():
 
 
 # Import and include routers
-from routers import upload, projects, tasks, auth, risks, export, search, meetings, reports, ai, diff, integrations
+from routers import upload, projects, tasks, auth, risks, export, search, meetings, reports, ai, diff, integrations, admin, health
 
 app.include_router(auth.router)
 app.include_router(upload.router)
@@ -295,5 +295,7 @@ app.include_router(reports.router)
 app.include_router(ai.router)
 app.include_router(diff.router)
 app.include_router(integrations.router)
+app.include_router(admin.router)
+app.include_router(health.router)
 
 logger.info(f"API initialized: version={VERSION}, environment={ENVIRONMENT}")

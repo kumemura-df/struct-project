@@ -162,6 +162,49 @@ def _create_tables(conn: sqlite3.Connection):
         )
     """)
     
+    # Users table (for role management)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            tenant_id TEXT,
+            email TEXT UNIQUE NOT NULL,
+            name TEXT,
+            role TEXT DEFAULT 'member',
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            last_login_at TEXT
+        )
+    """)
+    
+    # Tenant settings table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tenant_settings (
+            setting_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            setting_key TEXT NOT NULL,
+            setting_value TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            UNIQUE(tenant_id, setting_key)
+        )
+    """)
+    
+    # Health score snapshots table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS health_score_snapshots (
+            snapshot_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            score REAL NOT NULL,
+            overdue_penalty REAL,
+            risk_penalty REAL,
+            uncompleted_penalty REAL,
+            stale_penalty REAL,
+            details TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    
     # Task history table (for diff detection)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS task_history (
@@ -214,6 +257,13 @@ def _create_tables(conn: sqlite3.Connection):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_history_risk ON risk_history(risk_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_history_meeting ON risk_history(meeting_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_history_changed ON risk_history(changed_at)")
+    
+    # Indexes for users and health scores
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_score_project ON health_score_snapshots(project_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_score_created ON health_score_snapshots(created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tenant_settings_tenant ON tenant_settings(tenant_id)")
     
     conn.commit()
 
@@ -1929,3 +1979,412 @@ def get_meeting_diff_summary(meeting_id: str) -> Dict[str, Any]:
             "items": escalated_risks[:10]
         }
     }
+
+
+# ===== USER MANAGEMENT FUNCTIONS =====
+
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """Get user by email."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+    """Get user by ID."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def create_user(
+    email: str,
+    name: str,
+    role: str = 'member',
+    tenant_id: str = 'default'
+) -> Dict[str, Any]:
+    """Create a new user."""
+    import uuid
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    user_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    
+    cursor.execute("""
+        INSERT INTO users (user_id, tenant_id, email, name, role, is_active, created_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?)
+    """, (user_id, tenant_id, email, name, role, now))
+    
+    conn.commit()
+    conn.close()
+    
+    return {
+        "user_id": user_id,
+        "tenant_id": tenant_id,
+        "email": email,
+        "name": name,
+        "role": role,
+        "is_active": True,
+        "created_at": now
+    }
+
+
+def update_user(user_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Update user fields."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    allowed_fields = ['name', 'role', 'is_active']
+    set_parts = []
+    params = []
+    
+    for field, value in updates.items():
+        if field in allowed_fields:
+            set_parts.append(f"{field} = ?")
+            params.append(value)
+    
+    if not set_parts:
+        conn.close()
+        return None
+    
+    set_parts.append("updated_at = ?")
+    params.append(datetime.utcnow().isoformat())
+    params.append(user_id)
+    
+    cursor.execute(f"""
+        UPDATE users SET {', '.join(set_parts)}
+        WHERE user_id = ?
+    """, params)
+    
+    conn.commit()
+    
+    # Return updated user
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    return dict(row) if row else None
+
+
+def list_users(
+    tenant_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+) -> Dict[str, Any]:
+    """List users with pagination."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    where_clause = "WHERE 1=1"
+    params = []
+    
+    if tenant_id:
+        where_clause += " AND tenant_id = ?"
+        params.append(tenant_id)
+    
+    # Get total count
+    cursor.execute(f"SELECT COUNT(*) as total FROM users {where_clause}", params)
+    total = cursor.fetchone()["total"]
+    
+    # Get users
+    cursor.execute(f"""
+        SELECT * FROM users
+        {where_clause}
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """, params + [limit, offset])
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return {
+        "items": [dict(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset
+    }
+
+
+def update_user_last_login(email: str):
+    """Update user's last login timestamp."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users SET last_login_at = ?
+        WHERE email = ?
+    """, (datetime.utcnow().isoformat(), email))
+    conn.commit()
+    conn.close()
+
+
+# ===== AUDIT LOG FUNCTIONS =====
+
+def create_audit_log(
+    entity_type: str,
+    entity_id: str,
+    action: str,
+    user_id: Optional[str] = None,
+    old_value: Optional[str] = None,
+    new_value: Optional[str] = None,
+    details: Optional[Dict] = None
+):
+    """Create an audit log entry."""
+    import uuid
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO audit_log (log_id, entity_type, entity_id, action, old_value, new_value, user_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        str(uuid.uuid4()),
+        entity_type,
+        entity_id,
+        action,
+        json.dumps(old_value) if old_value else None,
+        json.dumps(new_value) if new_value else None,
+        user_id,
+        datetime.utcnow().isoformat()
+    ))
+    
+    conn.commit()
+    conn.close()
+
+
+def get_audit_logs(
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+) -> Dict[str, Any]:
+    """Get audit logs with filtering."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    where_parts = ["1=1"]
+    params = []
+    
+    if entity_type:
+        where_parts.append("entity_type = ?")
+        params.append(entity_type)
+    if entity_id:
+        where_parts.append("entity_id = ?")
+        params.append(entity_id)
+    if user_id:
+        where_parts.append("user_id = ?")
+        params.append(user_id)
+    
+    where_clause = " AND ".join(where_parts)
+    
+    # Get total
+    cursor.execute(f"SELECT COUNT(*) as total FROM audit_log WHERE {where_clause}", params)
+    total = cursor.fetchone()["total"]
+    
+    # Get logs
+    cursor.execute(f"""
+        SELECT * FROM audit_log
+        WHERE {where_clause}
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """, params + [limit, offset])
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return {
+        "items": [dict(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset
+    }
+
+
+# ===== HEALTH SCORE FUNCTIONS =====
+
+def calculate_project_health_score(project_id: str) -> Dict[str, Any]:
+    """
+    Calculate health score for a project (0-100).
+    
+    Scoring:
+    - Base: 100 points
+    - Overdue tasks: -20 max (50%+ overdue = max penalty)
+    - High risks: -5 per risk, max -25
+    - Uncompleted rate: -10 max (70%+ incomplete = max penalty)
+    - Stale (no updates): -1/day after 7 days, max -15
+    """
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    # Get task stats
+    cursor.execute("""
+        SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN status = 'DONE' THEN 1 ELSE 0 END) as completed,
+            SUM(CASE WHEN status != 'DONE' AND due_date < date('now') THEN 1 ELSE 0 END) as overdue
+        FROM tasks
+        WHERE project_id = ? AND deleted_at IS NULL
+    """, (project_id,))
+    task_row = cursor.fetchone()
+    
+    total_tasks = task_row["total"] or 0
+    completed_tasks = task_row["completed"] or 0
+    overdue_tasks = task_row["overdue"] or 0
+    
+    # Get high risk count
+    cursor.execute("""
+        SELECT COUNT(*) as high_risks
+        FROM risks
+        WHERE project_id = ? AND deleted_at IS NULL AND risk_level = 'HIGH'
+    """, (project_id,))
+    high_risks = cursor.fetchone()["high_risks"] or 0
+    
+    # Get last update
+    cursor.execute("""
+        SELECT MAX(updated_at) as last_update
+        FROM (
+            SELECT updated_at FROM tasks WHERE project_id = ? AND deleted_at IS NULL
+            UNION ALL
+            SELECT updated_at FROM risks WHERE project_id = ? AND deleted_at IS NULL
+        )
+    """, (project_id, project_id))
+    last_update_row = cursor.fetchone()
+    last_update = last_update_row["last_update"] if last_update_row else None
+    
+    conn.close()
+    
+    # Calculate penalties
+    base_score = 100
+    
+    # Overdue penalty (0-20)
+    overdue_rate = overdue_tasks / total_tasks if total_tasks > 0 else 0
+    overdue_penalty = min(20, overdue_rate * 40)
+    
+    # High risk penalty (0-25)
+    risk_penalty = min(25, high_risks * 5)
+    
+    # Uncompleted penalty (0-10)
+    uncompleted_rate = (total_tasks - completed_tasks) / total_tasks if total_tasks > 0 else 0
+    uncompleted_penalty = min(10, max(0, uncompleted_rate - 0.3) * 33)
+    
+    # Stale penalty (0-15)
+    stale_penalty = 0
+    if last_update:
+        try:
+            last_update_date = datetime.fromisoformat(last_update.replace('Z', '+00:00'))
+            days_since = (datetime.utcnow() - last_update_date.replace(tzinfo=None)).days
+            stale_penalty = min(15, max(0, days_since - 7))
+        except:
+            pass
+    
+    # Calculate final score
+    final_score = max(0, base_score - overdue_penalty - risk_penalty - uncompleted_penalty - stale_penalty)
+    
+    return {
+        "project_id": project_id,
+        "score": round(final_score, 1),
+        "base_score": base_score,
+        "overdue_penalty": round(overdue_penalty, 1),
+        "risk_penalty": round(risk_penalty, 1),
+        "uncompleted_penalty": round(uncompleted_penalty, 1),
+        "stale_penalty": round(stale_penalty, 1),
+        "details": {
+            "total_tasks": total_tasks,
+            "completed_tasks": completed_tasks,
+            "overdue_tasks": overdue_tasks,
+            "high_risks": high_risks,
+            "overdue_rate": round(overdue_rate * 100, 1),
+            "completion_rate": round((completed_tasks / total_tasks * 100) if total_tasks > 0 else 0, 1)
+        }
+    }
+
+
+def save_health_score_snapshot(project_id: str, score_data: Dict[str, Any]) -> str:
+    """Save a health score snapshot."""
+    import uuid
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    snapshot_id = str(uuid.uuid4())
+    
+    cursor.execute("""
+        INSERT INTO health_score_snapshots 
+        (snapshot_id, project_id, score, overdue_penalty, risk_penalty, uncompleted_penalty, stale_penalty, details, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        snapshot_id,
+        project_id,
+        score_data["score"],
+        score_data["overdue_penalty"],
+        score_data["risk_penalty"],
+        score_data["uncompleted_penalty"],
+        score_data["stale_penalty"],
+        json.dumps(score_data["details"]),
+        datetime.utcnow().isoformat()
+    ))
+    
+    conn.commit()
+    conn.close()
+    
+    return snapshot_id
+
+
+def get_health_score_history(
+    project_id: str,
+    limit: int = 30
+) -> List[Dict[str, Any]]:
+    """Get health score history for a project."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT * FROM health_score_snapshots
+        WHERE project_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+    """, (project_id, limit))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    result = []
+    for row in rows:
+        data = dict(row)
+        if data.get("details"):
+            try:
+                data["details"] = json.loads(data["details"])
+            except:
+                pass
+        result.append(data)
+    
+    return result
+
+
+def get_all_projects_health_scores() -> List[Dict[str, Any]]:
+    """Get health scores for all projects."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT project_id, project_name FROM projects
+        WHERE deleted_at IS NULL
+        ORDER BY project_name
+    """)
+    
+    projects = cursor.fetchall()
+    conn.close()
+    
+    scores = []
+    for p in projects:
+        score = calculate_project_health_score(p["project_id"])
+        score["project_name"] = p["project_name"]
+        scores.append(score)
+    
+    return sorted(scores, key=lambda x: x["score"])

@@ -72,6 +72,18 @@ export default function Dashboard() {
                         🔄 差分
                     </Link>
                     <Link
+                        href="/health"
+                        className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition-colors shadow-lg shadow-emerald-500/30 text-sm"
+                    >
+                        💓 ヘルス
+                    </Link>
+                    <Link
+                        href="/admin"
+                        className="px-3 py-2 rounded-lg bg-pink-600 hover:bg-pink-700 text-white font-semibold transition-colors shadow-lg shadow-pink-500/30 text-sm"
+                    >
+                        👑 管理
+                    </Link>
+                    <Link
                         href="/settings/integrations"
                         className="px-3 py-2 rounded-lg bg-gray-600 hover:bg-gray-700 text-white font-semibold transition-colors text-sm"
                     >

@@ -1226,3 +1226,105 @@ def get_task_lifecycle(task_id: str) -> Dict[str, Any]:
     if USE_LOCAL_DB:
         return local_db.get_task_lifecycle(task_id)
     return {}
+
+
+# ===== USER MANAGEMENT FUNCTIONS =====
+
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """Get user by email."""
+    if USE_LOCAL_DB:
+        return local_db.get_user_by_email(email)
+    return None
+
+
+def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+    """Get user by ID."""
+    if USE_LOCAL_DB:
+        return local_db.get_user_by_id(user_id)
+    return None
+
+
+def create_user(email: str, name: str, role: str = 'member', tenant_id: str = 'default') -> Dict[str, Any]:
+    """Create a new user."""
+    if USE_LOCAL_DB:
+        return local_db.create_user(email, name, role, tenant_id)
+    return {}
+
+
+def update_user(user_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Update user fields."""
+    if USE_LOCAL_DB:
+        return local_db.update_user(user_id, updates)
+    return None
+
+
+def list_users(tenant_id: Optional[str] = None, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+    """List users with pagination."""
+    if USE_LOCAL_DB:
+        return local_db.list_users(tenant_id, limit, offset)
+    return {"items": [], "total": 0, "limit": limit, "offset": offset}
+
+
+def update_user_last_login(email: str):
+    """Update user's last login timestamp."""
+    if USE_LOCAL_DB:
+        local_db.update_user_last_login(email)
+
+
+# ===== AUDIT LOG FUNCTIONS =====
+
+def create_audit_log(
+    entity_type: str,
+    entity_id: str,
+    action: str,
+    user_id: Optional[str] = None,
+    old_value: Optional[Any] = None,
+    new_value: Optional[Any] = None,
+    details: Optional[Dict] = None
+):
+    """Create an audit log entry."""
+    if USE_LOCAL_DB:
+        local_db.create_audit_log(entity_type, entity_id, action, user_id, old_value, new_value, details)
+
+
+def get_audit_logs(
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+) -> Dict[str, Any]:
+    """Get audit logs with filtering."""
+    if USE_LOCAL_DB:
+        return local_db.get_audit_logs(entity_type, entity_id, user_id, limit, offset)
+    return {"items": [], "total": 0, "limit": limit, "offset": offset}
+
+
+# ===== HEALTH SCORE FUNCTIONS =====
+
+def calculate_project_health_score(project_id: str) -> Dict[str, Any]:
+    """Calculate health score for a project."""
+    if USE_LOCAL_DB:
+        return local_db.calculate_project_health_score(project_id)
+    return {"project_id": project_id, "score": 0, "details": {}}
+
+
+def save_health_score_snapshot(project_id: str, score_data: Dict[str, Any]) -> str:
+    """Save a health score snapshot."""
+    if USE_LOCAL_DB:
+        return local_db.save_health_score_snapshot(project_id, score_data)
+    return ""
+
+
+def get_health_score_history(project_id: str, limit: int = 30) -> List[Dict[str, Any]]:
+    """Get health score history for a project."""
+    if USE_LOCAL_DB:
+        return local_db.get_health_score_history(project_id, limit)
+    return []
+
+
+def get_all_projects_health_scores() -> List[Dict[str, Any]]:
+    """Get health scores for all projects."""
+    if USE_LOCAL_DB:
+        return local_db.get_all_projects_health_scores()
+    return []
