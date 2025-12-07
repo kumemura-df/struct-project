@@ -1476,3 +1476,132 @@ def get_project_stats(project_id: str) -> Optional[Dict[str, Any]]:
         "risks_by_level": risks_by_level,
         "total_decisions": total_decisions,
     }
+
+
+# ===== WEEKLY REPORT FUNCTIONS =====
+
+def get_weekly_summary(start_date: str, end_date: str) -> Dict[str, Any]:
+    """Get weekly summary statistics."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    # Task statistics
+    cursor.execute("""
+        SELECT 
+            COUNT(*) as total_tasks,
+            SUM(CASE WHEN status != 'DONE' THEN 1 ELSE 0 END) as incomplete_tasks,
+            SUM(CASE WHEN status != 'DONE' AND due_date IS NOT NULL AND due_date < date('now') THEN 1 ELSE 0 END) as overdue_tasks
+        FROM tasks WHERE deleted_at IS NULL
+    """)
+    task_row = cursor.fetchone()
+    
+    # High risk count
+    cursor.execute("""
+        SELECT COUNT(*) as high_risks FROM risks 
+        WHERE deleted_at IS NULL AND risk_level = 'HIGH'
+    """)
+    risk_row = cursor.fetchone()
+    
+    # Decisions this week
+    cursor.execute("""
+        SELECT COUNT(*) as weekly_decisions FROM decisions 
+        WHERE deleted_at IS NULL AND date(created_at) BETWEEN ? AND ?
+    """, (start_date, end_date))
+    decision_row = cursor.fetchone()
+    
+    conn.close()
+    
+    return {
+        "total_tasks": task_row["total_tasks"] or 0,
+        "incomplete_tasks": task_row["incomplete_tasks"] or 0,
+        "overdue_tasks": task_row["overdue_tasks"] or 0,
+        "high_risks": risk_row["high_risks"] or 0,
+        "weekly_decisions": decision_row["weekly_decisions"] or 0,
+    }
+
+
+def get_overdue_tasks(limit: int = 10, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get overdue tasks sorted by days overdue."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    where_clause = "WHERE t.deleted_at IS NULL AND t.status != 'DONE' AND t.due_date IS NOT NULL AND t.due_date < date('now')"
+    params = []
+    
+    if project_id:
+        where_clause += " AND t.project_id = ?"
+        params.append(project_id)
+    
+    query = f"""
+        SELECT 
+            t.*,
+            p.project_name,
+            julianday('now') - julianday(t.due_date) as days_overdue
+        FROM tasks t
+        LEFT JOIN projects p ON t.project_id = p.project_id
+        {where_clause}
+        ORDER BY days_overdue DESC
+        LIMIT ?
+    """
+    params.append(limit)
+    
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [dict(row) for row in rows]
+
+
+def get_high_risks(limit: int = 10, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get high and medium priority risks."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    where_clause = "WHERE r.deleted_at IS NULL AND r.risk_level IN ('HIGH', 'MEDIUM')"
+    params = []
+    
+    if project_id:
+        where_clause += " AND r.project_id = ?"
+        params.append(project_id)
+    
+    query = f"""
+        SELECT 
+            r.*,
+            p.project_name
+        FROM risks r
+        LEFT JOIN projects p ON r.project_id = p.project_id
+        {where_clause}
+        ORDER BY 
+            CASE r.risk_level WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,
+            r.created_at DESC
+        LIMIT ?
+    """
+    params.append(limit)
+    
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [dict(row) for row in rows]
+
+
+def get_recent_decisions(start_date: str, end_date: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Get recent decisions within date range."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT 
+            d.*,
+            p.project_name
+        FROM decisions d
+        LEFT JOIN projects p ON d.project_id = p.project_id
+        WHERE d.deleted_at IS NULL AND date(d.created_at) BETWEEN ? AND ?
+        ORDER BY d.created_at DESC
+        LIMIT ?
+    """, (start_date, end_date, limit))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [dict(row) for row in rows]

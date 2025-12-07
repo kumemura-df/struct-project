@@ -964,3 +964,153 @@ def get_risk_stats() -> Dict[str, Any]:
         "by_level": by_level,
         "by_project": by_project
     }
+
+
+# ===== WEEKLY REPORT FUNCTIONS =====
+
+def get_weekly_summary(start_date: str, end_date: str) -> Dict[str, Any]:
+    """Get weekly summary statistics."""
+    if USE_LOCAL_DB:
+        return local_db.get_weekly_summary(start_date, end_date)
+    
+    client = get_client()
+    
+    # Task statistics
+    task_query = f"""
+        SELECT 
+            COUNT(*) as total_tasks,
+            COUNTIF(status != 'DONE') as incomplete_tasks,
+            COUNTIF(status != 'DONE' AND due_date IS NOT NULL AND due_date < CURRENT_DATE()) as overdue_tasks
+        FROM `{PROJECT_ID}.{DATASET_ID}.tasks`
+    """
+    task_result = list(client.query(task_query))[0]
+    
+    # High risk count
+    risk_query = f"""
+        SELECT COUNT(*) as high_risks
+        FROM `{PROJECT_ID}.{DATASET_ID}.risks`
+        WHERE risk_level = 'HIGH'
+    """
+    risk_result = list(client.query(risk_query))[0]
+    
+    # Decisions this week
+    decision_query = f"""
+        SELECT COUNT(*) as weekly_decisions
+        FROM `{PROJECT_ID}.{DATASET_ID}.decisions`
+        WHERE DATE(created_at) BETWEEN @start_date AND @end_date
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("start_date", "DATE", start_date),
+            bigquery.ScalarQueryParameter("end_date", "DATE", end_date),
+        ]
+    )
+    decision_result = list(client.query(decision_query, job_config=job_config))[0]
+    
+    return {
+        "total_tasks": task_result.total_tasks,
+        "incomplete_tasks": task_result.incomplete_tasks,
+        "overdue_tasks": task_result.overdue_tasks,
+        "high_risks": risk_result.high_risks,
+        "weekly_decisions": decision_result.weekly_decisions,
+    }
+
+
+def get_overdue_tasks(limit: int = 10, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get overdue tasks sorted by days overdue."""
+    if USE_LOCAL_DB:
+        return local_db.get_overdue_tasks(limit, project_id)
+    
+    client = get_client()
+    
+    where_clause = "WHERE status != 'DONE' AND due_date IS NOT NULL AND due_date < CURRENT_DATE()"
+    query_params = []
+    
+    if project_id:
+        where_clause += " AND t.project_id = @project_id"
+        query_params.append(bigquery.ScalarQueryParameter("project_id", "STRING", project_id))
+    
+    query = f"""
+        SELECT 
+            t.*,
+            p.project_name,
+            DATE_DIFF(CURRENT_DATE(), DATE(t.due_date), DAY) as days_overdue
+        FROM `{PROJECT_ID}.{DATASET_ID}.tasks` t
+        LEFT JOIN `{PROJECT_ID}.{DATASET_ID}.projects` p ON t.project_id = p.project_id
+        {where_clause}
+        ORDER BY days_overdue DESC
+        LIMIT {limit}
+    """
+    
+    if query_params:
+        job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+        result = client.query(query, job_config=job_config)
+    else:
+        result = client.query(query)
+    
+    return [dict(row) for row in result]
+
+
+def get_high_risks(limit: int = 10, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get high and medium priority risks."""
+    if USE_LOCAL_DB:
+        return local_db.get_high_risks(limit, project_id)
+    
+    client = get_client()
+    
+    where_clause = "WHERE r.risk_level IN ('HIGH', 'MEDIUM')"
+    query_params = []
+    
+    if project_id:
+        where_clause += " AND r.project_id = @project_id"
+        query_params.append(bigquery.ScalarQueryParameter("project_id", "STRING", project_id))
+    
+    query = f"""
+        SELECT 
+            r.*,
+            p.project_name
+        FROM `{PROJECT_ID}.{DATASET_ID}.risks` r
+        LEFT JOIN `{PROJECT_ID}.{DATASET_ID}.projects` p ON r.project_id = p.project_id
+        {where_clause}
+        ORDER BY 
+            CASE r.risk_level WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,
+            r.created_at DESC
+        LIMIT {limit}
+    """
+    
+    if query_params:
+        job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+        result = client.query(query, job_config=job_config)
+    else:
+        result = client.query(query)
+    
+    return [dict(row) for row in result]
+
+
+def get_recent_decisions(start_date: str, end_date: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Get recent decisions within date range."""
+    if USE_LOCAL_DB:
+        return local_db.get_recent_decisions(start_date, end_date, limit)
+    
+    client = get_client()
+    
+    query = f"""
+        SELECT 
+            d.*,
+            p.project_name
+        FROM `{PROJECT_ID}.{DATASET_ID}.decisions` d
+        LEFT JOIN `{PROJECT_ID}.{DATASET_ID}.projects` p ON d.project_id = p.project_id
+        WHERE DATE(d.created_at) BETWEEN @start_date AND @end_date
+        ORDER BY d.created_at DESC
+        LIMIT {limit}
+    """
+    
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("start_date", "DATE", start_date),
+            bigquery.ScalarQueryParameter("end_date", "DATE", end_date),
+        ]
+    )
+    result = client.query(query, job_config=job_config)
+    
+    return [dict(row) for row in result]

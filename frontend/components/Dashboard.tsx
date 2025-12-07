@@ -41,6 +41,12 @@ export default function Dashboard() {
                     
                     {/* Navigation Links */}
                     <Link
+                        href="/reports"
+                        className="px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-700 text-white font-semibold transition-colors shadow-lg shadow-orange-500/30 text-sm"
+                    >
+                        📊 レポート
+                    </Link>
+                    <Link
                         href="/meetings"
                         className="px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-700 text-white font-semibold transition-colors shadow-lg shadow-cyan-500/30 text-sm"
                     >
