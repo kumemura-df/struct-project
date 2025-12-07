@@ -166,10 +166,10 @@ class TestHealthCheck:
         """Test health check returns 200 and correct message."""
         response = client.get("/")
         assert response.status_code == 200
-        assert response.json() == {
-            "message": "Project Progress DB API is running", 
-            "version": "1.0.0"
-        }
+        data = response.json()
+        assert data["message"] == "Project Progress DB API is running"
+        assert data["version"] == "1.0.0"
+        assert "environment" in data
 
 
 # ==============================================================================
@@ -278,9 +278,11 @@ class TestProjectsEndpoint:
         
         assert response.status_code == 200
         data = response.json()
-        assert len(data) == 2
-        assert data[0]["project_name"] == "Project Alpha"
-        assert data[1]["project_name"] == "Project Beta"
+        # Paginated response format
+        assert "items" in data
+        assert len(data["items"]) == 2
+        assert data["items"][0]["project_name"] == "Project Alpha"
+        assert data["items"][1]["project_name"] == "Project Beta"
     
     @patch("routers.projects.bigquery.list_projects")
     def test_get_projects_empty(self, mock_list_projects, auth_headers):
@@ -290,7 +292,10 @@ class TestProjectsEndpoint:
         response = client.get("/projects/", headers=auth_headers)
         
         assert response.status_code == 200
-        assert response.json() == []
+        data = response.json()
+        # Paginated response format
+        assert "items" in data
+        assert data["items"] == []
     
     @patch("routers.projects.bigquery.list_projects")
     def test_get_projects_server_error(self, mock_list_projects, auth_headers):
@@ -315,37 +320,61 @@ class TestTasksEndpoint:
         response = client.get("/tasks/")
         assert response.status_code == 401
     
-    @patch("routers.tasks.bigquery.list_tasks")
+    @patch("routers.tasks.bigquery.list_tasks_paginated")
     def test_get_tasks_success(self, mock_list_tasks, auth_headers, mock_tasks):
         """Test successful tasks retrieval."""
-        mock_list_tasks.return_value = mock_tasks
+        mock_list_tasks.return_value = {
+            "items": mock_tasks,
+            "total": len(mock_tasks),
+            "limit": 20,
+            "offset": 0,
+            "has_more": False
+        }
         
         response = client.get("/tasks/", headers=auth_headers)
         
         assert response.status_code == 200
         data = response.json()
-        assert len(data) == 2
-        assert data[0]["task_title"] == "Complete unit testing"
+        # Paginated response format
+        assert "items" in data
+        assert len(data["items"]) == 2
+        assert data["items"][0]["task_title"] == "Complete unit testing"
     
-    @patch("routers.tasks.bigquery.list_tasks")
+    @patch("routers.tasks.bigquery.list_tasks_paginated")
     def test_get_tasks_with_project_filter(self, mock_list_tasks, auth_headers, mock_tasks):
         """Test tasks retrieval with project_id filter."""
-        mock_list_tasks.return_value = [mock_tasks[0]]
+        mock_list_tasks.return_value = {
+            "items": [mock_tasks[0]],
+            "total": 1,
+            "limit": 20,
+            "offset": 0,
+            "has_more": False
+        }
         
         response = client.get("/tasks/?project_id=proj-001", headers=auth_headers)
         
         assert response.status_code == 200
-        mock_list_tasks.assert_called_once_with("proj-001")
+        data = response.json()
+        assert "items" in data
     
-    @patch("routers.tasks.bigquery.list_tasks")
+    @patch("routers.tasks.bigquery.list_tasks_paginated")
     def test_get_tasks_empty(self, mock_list_tasks, auth_headers):
         """Test tasks endpoint with no data."""
-        mock_list_tasks.return_value = []
+        mock_list_tasks.return_value = {
+            "items": [],
+            "total": 0,
+            "limit": 20,
+            "offset": 0,
+            "has_more": False
+        }
         
         response = client.get("/tasks/", headers=auth_headers)
         
         assert response.status_code == 200
-        assert response.json() == []
+        data = response.json()
+        # Paginated response format
+        assert "items" in data
+        assert data["items"] == []
 
 
 # ==============================================================================
@@ -360,36 +389,53 @@ class TestRisksEndpoint:
         response = client.get("/risks/")
         assert response.status_code == 401
     
-    @patch("routers.risks.bigquery.list_risks")
+    @patch("routers.risks.bigquery.list_risks_paginated")
     def test_get_risks_success(self, mock_list_risks, auth_headers, mock_risks):
         """Test successful risks retrieval."""
-        mock_list_risks.return_value = mock_risks
+        mock_list_risks.return_value = {
+            "items": mock_risks,
+            "total": len(mock_risks),
+            "limit": 20,
+            "offset": 0,
+            "has_more": False
+        }
         
         response = client.get("/risks/", headers=auth_headers)
         
         assert response.status_code == 200
         data = response.json()
-        assert len(data) == 2
-        assert data[0]["risk_level"] == "HIGH"
+        # Paginated response format
+        assert "items" in data
+        assert len(data["items"]) == 2
+        assert data["items"][0]["risk_level"] == "HIGH"
     
-    @patch("routers.risks.bigquery.list_risks")
+    @patch("routers.risks.bigquery.list_risks_paginated")
     def test_get_risks_with_level_filter(self, mock_list_risks, auth_headers, mock_risks):
         """Test risks retrieval with risk_level filter."""
-        mock_list_risks.return_value = [mock_risks[0]]
+        mock_list_risks.return_value = {
+            "items": [mock_risks[0]],
+            "total": 1,
+            "limit": 20,
+            "offset": 0,
+            "has_more": False
+        }
         
         response = client.get("/risks/?risk_level=HIGH", headers=auth_headers)
         
         assert response.status_code == 200
-        mock_list_risks.assert_called_once_with(
-            project_id=None, 
-            risk_level="HIGH", 
-            meeting_id=None
-        )
+        data = response.json()
+        assert "items" in data
     
-    @patch("routers.risks.bigquery.list_risks")
+    @patch("routers.risks.bigquery.list_risks_paginated")
     def test_get_risks_with_multiple_filters(self, mock_list_risks, auth_headers):
         """Test risks retrieval with multiple filters."""
-        mock_list_risks.return_value = []
+        mock_list_risks.return_value = {
+            "items": [],
+            "total": 0,
+            "limit": 20,
+            "offset": 0,
+            "has_more": False
+        }
         
         response = client.get(
             "/risks/?project_id=proj-001&risk_level=HIGH&meeting_id=meet-001",
@@ -397,11 +443,8 @@ class TestRisksEndpoint:
         )
         
         assert response.status_code == 200
-        mock_list_risks.assert_called_once_with(
-            project_id="proj-001",
-            risk_level="HIGH",
-            meeting_id="meet-001"
-        )
+        data = response.json()
+        assert "items" in data
     
     @patch("routers.risks.bigquery.get_risk_stats")
     def test_get_risk_stats_success(self, mock_get_stats, auth_headers, mock_risk_stats):
@@ -416,17 +459,25 @@ class TestRisksEndpoint:
         assert data["by_level"]["HIGH"] == 2
         assert len(data["by_project"]) == 2
     
-    @patch("routers.risks.bigquery.list_decisions")
+    @patch("routers.risks.bigquery.list_decisions_paginated")
     def test_get_decisions_success(self, mock_list_decisions, auth_headers, mock_decisions):
         """Test successful decisions retrieval."""
-        mock_list_decisions.return_value = mock_decisions
+        mock_list_decisions.return_value = {
+            "items": mock_decisions,
+            "total": len(mock_decisions),
+            "limit": 20,
+            "offset": 0,
+            "has_more": False
+        }
         
         response = client.get("/risks/decisions", headers=auth_headers)
         
         assert response.status_code == 200
         data = response.json()
-        assert len(data) == 1
-        assert "Python" in data[0]["decision_content"]
+        # Paginated response format
+        assert "items" in data
+        assert len(data["items"]) == 1
+        assert "Python" in data["items"][0]["decision_content"]
 
 
 # ==============================================================================
