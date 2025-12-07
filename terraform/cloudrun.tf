@@ -62,6 +62,11 @@ resource "google_cloud_run_service" "api" {
         }
         
         env {
+          name  = "GCS_BUCKET"
+          value = google_storage_bucket.meeting_notes_raw.name
+        }
+        
+        env {
           name  = "ENVIRONMENT"
           value = var.environment
         }
@@ -174,6 +179,17 @@ resource "google_cloud_run_service" "worker" {
           name  = "REGION"
           value = var.region
         }
+
+        # Gemini 2.5 Pro configuration (can be overridden via gcloud run deploy)
+        env {
+          name  = "GEMINI_LOCATION"
+          value = "us-central1"
+        }
+
+        env {
+          name  = "GEMINI_MODEL"
+          value = "gemini-2.5-pro"
+        }
         
         resources {
           limits = {
@@ -197,7 +213,10 @@ resource "google_cloud_run_service" "worker" {
     latest_revision = true
   }
 
-  depends_on = [google_project_service.run_api]
+  depends_on = [
+    google_project_service.run_api,
+    google_project_service.aiplatform_api,
+  ]
 }
 
 # Create service account for Pub/Sub to invoke Worker

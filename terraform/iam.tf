@@ -26,6 +26,12 @@ resource "google_project_iam_member" "api_sa_bq" {
   member  = "serviceAccount:${google_service_account.api_sa.email}"
 }
 
+resource "google_project_iam_member" "api_sa_bq_job_user" {
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
+  member  = "serviceAccount:${google_service_account.api_sa.email}"
+}
+
 resource "google_project_iam_member" "api_sa_pubsub" {
   project = var.project_id
   role    = "roles/pubsub.publisher"
@@ -41,6 +47,12 @@ resource "google_project_iam_member" "worker_sa_storage" {
 resource "google_project_iam_member" "worker_sa_bq" {
   project = var.project_id
   role    = "roles/bigquery.dataEditor"
+  member  = "serviceAccount:${google_service_account.worker_sa.email}"
+}
+
+resource "google_project_iam_member" "worker_sa_bq_job_user" {
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
   member  = "serviceAccount:${google_service_account.worker_sa.email}"
 }
 

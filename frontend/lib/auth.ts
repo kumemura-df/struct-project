@@ -65,13 +65,31 @@ export async function isAuthenticated(): Promise<boolean> {
  */
 export function login(redirectTo?: string): void {
     if (typeof window === 'undefined') return;
-    
-    const currentPath = window.location.pathname;
-    const redirect = redirectTo || currentPath;
-    
+
+    const origin = window.location.origin;
+
+    // Build absolute redirect URL on the frontend origin
+    let redirectUrl: string;
+
+    if (redirectTo) {
+        // If redirectTo is already an absolute URL, use it as-is
+        if (redirectTo.startsWith('http://') || redirectTo.startsWith('https://')) {
+            redirectUrl = redirectTo;
+        } else if (redirectTo.startsWith('/')) {
+            redirectUrl = `${origin}${redirectTo}`;
+        } else {
+            redirectUrl = `${origin}/${redirectTo}`;
+        }
+    } else {
+        // Default: current full URL (including query string)
+        redirectUrl = window.location.href;
+    }
+
     // Redirect to API login endpoint
-    // The API will handle OAuth flow and set HttpOnly cookie on callback
-    window.location.href = `${API_URL}/auth/login?redirect_to=${encodeURIComponent(redirect)}`;
+    // The API will handle OAuth flow and set HttpOnly cookie on callback.
+    // We pass an absolute URL so that the backend can safely validate and
+    // redirect back to the correct frontend origin.
+    window.location.href = `${API_URL}/auth/login?redirect_to=${encodeURIComponent(redirectUrl)}`;
 }
 
 /**

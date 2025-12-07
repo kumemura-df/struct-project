@@ -169,7 +169,11 @@ def get_meeting_metadata(meeting_id: str) -> Optional[Dict[str, Any]]:
 
 
 def update_meeting_status(meeting_id: str, status: str, error_message: str = None):
-    """Update meeting processing status.
+    """Update meeting processing status by inserting into a separate status table.
+    
+    BigQuery doesn't allow UPDATE/DELETE/MERGE on rows in the streaming buffer 
+    (up to 90 minutes after INSERT). To avoid this, we use a separate status table
+    and INSERT new status records. The latest status is determined by timestamp.
     
     Args:
         meeting_id: Meeting record ID
@@ -178,22 +182,49 @@ def update_meeting_status(meeting_id: str, status: str, error_message: str = Non
     """
     client = get_client()
     
-    query = f"""
-        UPDATE `{_table_id('meetings')}`
-        SET status = @status, error_message = @error_message
-        WHERE meeting_id = @meeting_id
-    """
+    # Ensure status table exists
+    _ensure_meeting_status_table()
     
-    job_config = bigquery.QueryJobConfig(
-        query_parameters=[
-            bigquery.ScalarQueryParameter("meeting_id", "STRING", meeting_id),
-            bigquery.ScalarQueryParameter("status", "STRING", status),
-            bigquery.ScalarQueryParameter("error_message", "STRING", error_message or ""),
-        ]
+    # INSERT new status record (append-only pattern)
+    row = {
+        "meeting_id": meeting_id,
+        "status": status,
+        "error_message": error_message or "",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    
+    errors = client.insert_rows_json(_table_id('meeting_status'), [row])
+    if errors:
+        logger.error(f"Failed to insert status: {errors}")
+        raise Exception(f"Failed to update status: {errors}")
+    
+    logger.info(f"Updated meeting {meeting_id} status to {status}")
+
+
+def _ensure_meeting_status_table():
+    """Create meeting_status table if it doesn't exist."""
+    client = get_client()
+    
+    schema = [
+        bigquery.SchemaField("meeting_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("status", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("error_message", "STRING"),
+        bigquery.SchemaField("updated_at", "TIMESTAMP", mode="REQUIRED"),
+    ]
+    
+    table = bigquery.Table(_table_id('meeting_status'), schema=schema)
+    table.time_partitioning = bigquery.TimePartitioning(
+        type_=bigquery.TimePartitioningType.DAY,
+        field="updated_at",
     )
     
-    client.query(query, job_config=job_config).result()
-    logger.info(f"Updated meeting {meeting_id} status to {status}")
+    try:
+        client.create_table(table)
+        logger.info("Created meeting_status table")
+    except Exception as e:
+        if "Already Exists" not in str(e):
+            # Table already exists is OK
+            logger.debug(f"meeting_status table check: {e}")
 
 
 # =============================================================================
@@ -203,14 +234,20 @@ def update_meeting_status(meeting_id: str, status: str, error_message: str = Non
 def save_extracted_data(meeting_id: str, extracted_data: dict):
     """Save extracted data to BigQuery with partial failure handling.
     
+    Supports both new Notion-compatible schema and legacy schema.
+    
     Args:
         meeting_id: Meeting record ID
-        extracted_data: Dict with projects, tasks, risks, decisions
+        extracted_data: Dict with meeting, issues, decisions, actions, risks, projects, tasks
         
     Raises:
         ProcessingError: If critical inserts fail
     """
     client = get_client()
+    
+    # Ensure new tables exist
+    _ensure_issues_table()
+    _ensure_actions_table()
     
     # Get meeting metadata for date context
     meeting_meta = get_meeting_metadata(meeting_id)
@@ -221,7 +258,22 @@ def save_extracted_data(meeting_id: str, extracted_data: dict):
     # 1. Projects - upsert (find existing or create new)
     project_map = _save_projects(client, meeting_id, extracted_data.get("projects", []))
     
-    # 2. Tasks
+    # 2. Issues (new Notion-compatible)
+    issues_errors = _save_issues(
+        client, meeting_id, extracted_data.get("issues", [])
+    )
+    if issues_errors:
+        errors_summary.append(f"issues: {len(issues_errors)} errors")
+    
+    # 3. Actions (new Notion-compatible)
+    actions_errors = _save_actions(
+        client, meeting_id, extracted_data.get("actions", []),
+        meeting_date
+    )
+    if actions_errors:
+        errors_summary.append(f"actions: {len(actions_errors)} errors")
+    
+    # 4. Tasks (legacy - for backward compatibility)
     tasks_errors = _save_tasks(
         client, meeting_id, extracted_data.get("tasks", []),
         project_map, meeting_date
@@ -229,7 +281,7 @@ def save_extracted_data(meeting_id: str, extracted_data: dict):
     if tasks_errors:
         errors_summary.append(f"tasks: {len(tasks_errors)} errors")
     
-    # 3. Risks
+    # 5. Risks (enhanced with new fields)
     risks_errors = _save_risks(
         client, meeting_id, extracted_data.get("risks", []),
         project_map
@@ -237,7 +289,7 @@ def save_extracted_data(meeting_id: str, extracted_data: dict):
     if risks_errors:
         errors_summary.append(f"risks: {len(risks_errors)} errors")
     
-    # 4. Decisions
+    # 6. Decisions (enhanced with reason)
     decisions_errors = _save_decisions(
         client, meeting_id, extracted_data.get("decisions", []),
         project_map
@@ -249,6 +301,8 @@ def save_extracted_data(meeting_id: str, extracted_data: dict):
     logger.info(
         f"Saved data for meeting {meeting_id}: "
         f"{len(project_map)} projects, "
+        f"{len(extracted_data.get('issues', []))} issues, "
+        f"{len(extracted_data.get('actions', []))} actions, "
         f"{len(extracted_data.get('tasks', []))} tasks, "
         f"{len(extracted_data.get('risks', []))} risks, "
         f"{len(extracted_data.get('decisions', []))} decisions"
@@ -316,7 +370,11 @@ def _save_projects(
 
 
 def _update_project_meeting(client: bigquery.Client, project_id: str, meeting_id: str):
-    """Update project's latest meeting reference."""
+    """Update project's latest meeting reference.
+    
+    Note: This may fail if the project row is in the streaming buffer.
+    We catch and log the error but don't fail the overall processing.
+    """
     query = f"""
         UPDATE `{_table_id('projects')}`
         SET latest_meeting_id = @meeting_id,
@@ -331,7 +389,14 @@ def _update_project_meeting(client: bigquery.Client, project_id: str, meeting_id
                                          datetime.now(timezone.utc).isoformat()),
         ]
     )
-    client.query(query, job_config=job_config).result()
+    try:
+        client.query(query, job_config=job_config).result()
+    except Exception as e:
+        # Log but don't fail - streaming buffer issue will resolve after ~90 minutes
+        if "streaming buffer" in str(e).lower():
+            logger.warning(f"Could not update project {project_id} - in streaming buffer. Will update later.")
+        else:
+            logger.warning(f"Failed to update project {project_id}: {e}")
 
 
 def _save_tasks(
@@ -382,9 +447,11 @@ def _save_risks(
     risks: List[Dict[str, Any]],
     project_map: Dict[str, str]
 ) -> List[Any]:
-    """Save risks."""
+    """Save risks with enhanced fields (category, severity, mitigation)."""
     if not risks:
         return []
+    
+    import json
     
     rows = []
     for r in risks:
@@ -396,9 +463,13 @@ def _save_risks(
             "tenant_id": "default",
             "meeting_id": meeting_id,
             "project_id": p_id,
-            "risk_description": r.get("risk_description", "")[:2000],
-            "risk_level": r.get("risk_level", "MEDIUM"),
+            "risk_description": (r.get("name") or r.get("risk_description", ""))[:2000],
+            "risk_level": r.get("severity") or r.get("risk_level", "MEDIUM"),
+            "category": r.get("category", "OTHER"),
+            "likelihood": r.get("likelihood", "MEDIUM"),
+            "mitigation": r.get("mitigation", "")[:2000],
             "owner": r.get("owner", "")[:200],
+            "related_issue_ids": json.dumps(r.get("related_issue_ids", [])),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "source_sentence": r.get("source_sentence", "")[:1000],
         })
@@ -413,7 +484,7 @@ def _save_decisions(
     decisions: List[Dict[str, Any]],
     project_map: Dict[str, str]
 ) -> List[Any]:
-    """Save decisions."""
+    """Save decisions with reason (enhanced for Notion compatibility)."""
     if not decisions:
         return []
     
@@ -427,10 +498,143 @@ def _save_decisions(
             "tenant_id": "default",
             "meeting_id": meeting_id,
             "project_id": p_id,
-            "decision_content": d.get("decision_content", "")[:2000],
+            "decision_content": (d.get("name") or d.get("decision_content", ""))[:2000],
+            "reason": d.get("reason", "")[:2000],
+            "decided_by": d.get("decided_by", "")[:200],
             "created_at": datetime.now(timezone.utc).isoformat(),
             "source_sentence": d.get("source_sentence", "")[:1000],
         })
     
     errors = client.insert_rows_json(_table_id('decisions'), rows)
+    return errors
+
+
+# =============================================================================
+# New Notion-compatible Tables
+# =============================================================================
+
+def _ensure_issues_table():
+    """Create issues table if it doesn't exist."""
+    client = get_client()
+    
+    schema = [
+        bigquery.SchemaField("issue_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("tenant_id", "STRING"),
+        bigquery.SchemaField("meeting_id", "STRING"),
+        bigquery.SchemaField("name", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("type", "STRING"),  # PURPOSE, ISSUE, SUB_ISSUE
+        bigquery.SchemaField("parent_issue_id", "STRING"),
+        bigquery.SchemaField("related_issue_ids", "STRING"),  # JSON array as string
+        bigquery.SchemaField("status", "STRING"),  # OPEN, IN_DISCUSSION, RESOLVED, DEFERRED
+        bigquery.SchemaField("description", "STRING"),
+        bigquery.SchemaField("source_sentence", "STRING"),
+        bigquery.SchemaField("created_at", "TIMESTAMP"),
+    ]
+    
+    table = bigquery.Table(_table_id('issues'), schema=schema)
+    
+    try:
+        client.create_table(table)
+        logger.info("Created issues table")
+    except Exception as e:
+        if "Already Exists" not in str(e):
+            logger.debug(f"issues table check: {e}")
+
+
+def _ensure_actions_table():
+    """Create actions table if it doesn't exist."""
+    client = get_client()
+    
+    schema = [
+        bigquery.SchemaField("action_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("tenant_id", "STRING"),
+        bigquery.SchemaField("meeting_id", "STRING"),
+        bigquery.SchemaField("name", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("description", "STRING"),
+        bigquery.SchemaField("owner", "STRING"),
+        bigquery.SchemaField("due_date", "DATE"),
+        bigquery.SchemaField("priority", "STRING"),  # LOW, MEDIUM, HIGH, CRITICAL
+        bigquery.SchemaField("status", "STRING"),  # NOT_STARTED, IN_PROGRESS, DONE, BLOCKED
+        bigquery.SchemaField("related_issue_ids", "STRING"),  # JSON array as string
+        bigquery.SchemaField("source_sentence", "STRING"),
+        bigquery.SchemaField("created_at", "TIMESTAMP"),
+    ]
+    
+    table = bigquery.Table(_table_id('actions'), schema=schema)
+    
+    try:
+        client.create_table(table)
+        logger.info("Created actions table")
+    except Exception as e:
+        if "Already Exists" not in str(e):
+            logger.debug(f"actions table check: {e}")
+
+
+def _save_issues(
+    client: bigquery.Client,
+    meeting_id: str,
+    issues: List[Dict[str, Any]]
+) -> List[Any]:
+    """Save issues with hierarchy support."""
+    if not issues:
+        return []
+    
+    import json
+    
+    rows = []
+    for issue in issues:
+        rows.append({
+            "issue_id": str(uuid.uuid4()),
+            "tenant_id": "default",
+            "meeting_id": meeting_id,
+            "name": issue.get("name", "")[:500],
+            "type": issue.get("type", "ISSUE"),
+            "parent_issue_id": issue.get("parent_issue_id"),
+            "related_issue_ids": json.dumps(issue.get("related_issue_ids", [])),
+            "status": issue.get("status", "OPEN"),
+            "description": issue.get("description", "")[:2000],
+            "source_sentence": issue.get("source_sentence", "")[:1000],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    
+    errors = client.insert_rows_json(_table_id('issues'), rows)
+    return errors
+
+
+def _save_actions(
+    client: bigquery.Client,
+    meeting_id: str,
+    actions: List[Dict[str, Any]],
+    meeting_date: Optional[str]
+) -> List[Any]:
+    """Save actions with enhanced fields."""
+    if not actions:
+        return []
+    
+    import json
+    
+    rows = []
+    for action in actions:
+        # Parse due date
+        due_date = None
+        due_date_text = action.get("due_date", "")
+        if due_date_text and meeting_date:
+            due_date = parse_date_with_meeting_context(due_date_text, meeting_date)
+        
+        rows.append({
+            "action_id": str(uuid.uuid4()),
+            "tenant_id": "default",
+            "meeting_id": meeting_id,
+            "name": action.get("name", "")[:500],
+            "description": action.get("description", "")[:2000],
+            "owner": action.get("owner", "Unassigned")[:200],
+            "due_date": due_date,
+            "priority": action.get("priority", "MEDIUM"),
+            "status": action.get("status", "NOT_STARTED"),
+            "related_issue_ids": json.dumps(action.get("related_issue_ids", [])),
+            "source_sentence": action.get("source_sentence", "")[:1000],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    
+    errors = client.insert_rows_json(_table_id('actions'), rows)
     return errors

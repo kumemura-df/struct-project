@@ -104,7 +104,7 @@ steps:
       - '--platform=managed'
       - '--no-allow-unauthenticated'
       - '--service-account=${_WORKER_SA_EMAIL}'
-      - '--set-env-vars=PROJECT_ID=${PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},REGION=${_REGION}'
+      - '--set-env-vars=PROJECT_ID=${PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},REGION=${_REGION},GEMINI_LOCATION=${_GEMINI_LOCATION},GEMINI_MODEL=${_GEMINI_MODEL}'
     waitFor: ['push-worker']
 
   # Deploy Frontend to Cloud Run (staging)
@@ -169,6 +169,8 @@ substitutions:
   _ALLOWED_OAUTH_DOMAINS: ''
   _API_SA_EMAIL: ''  # Set via trigger
   _WORKER_SA_EMAIL: ''  # Set via trigger
+  _GEMINI_LOCATION: 'us-central1'
+  _GEMINI_MODEL: 'gemini-2.5-pro'
 
 options:
   machineType: 'E2_HIGHCPU_8'

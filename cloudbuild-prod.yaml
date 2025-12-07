@@ -144,38 +144,62 @@ print(f'✅ Security scan passed (Critical: {critical}, High: {high})')
   # Phase 5: Deploy to Production
   # ===========================================================================
 
-  # Deploy API
+  # Deploy API (FRONTEND_URL is expected to be set via existing service config or env vars)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'deploy-api'
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - 'run'
-      - 'deploy'
-      - 'project-progress-api-${_ENVIRONMENT}'
-      - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/api:${TAG_NAME}'
-      - '--region=${_REGION}'
-      - '--platform=managed'
-      - '--allow-unauthenticated'
-      - '--service-account=${_API_SA_EMAIL}'
-      - '--set-env-vars=PROJECT_ID=${PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},PUBSUB_TOPIC=${_PUBSUB_TOPIC},ENVIRONMENT=${_ENVIRONMENT},ALLOWED_OAUTH_DOMAINS=${_ALLOWED_OAUTH_DOMAINS}'
-      - '--set-secrets=OAUTH_CLIENT_ID=oauth-client-id:latest,OAUTH_CLIENT_SECRET=oauth-client-secret:latest,JWT_SECRET_KEY=jwt-secret-key:latest'
-      - '--min-instances=1'
-      - '--max-instances=10'
-      - '--cpu=1'
-      - '--memory=512Mi'
-      - '--concurrency=80'
-      - '--timeout=60s'
+      - '-c'
+      - |
+        echo "Deploying API to Cloud Run (env=${_ENVIRONMENT})"
+
+        # Note: In prod pipeline we expect FRONTEND_URL to be already managed
+        # via existing service configuration or environment, so here we only
+        # ensure that it is NOT obviously invalid when provided via substitutions.
+        if [ -n "${_FRONTEND_URL:-}" ]; then
+          if echo "${_FRONTEND_URL}" | grep -qi 'localhost'; then
+            echo "❌ _FRONTEND_URL contains 'localhost' for production deployment. This is not allowed."
+            exit 1
+          fi
+          EXTRA_ENV=",FRONTEND_URL=${_FRONTEND_URL}"
+          echo "✅ Using explicit FRONTEND_URL=${_FRONTEND_URL}"
+        else
+          EXTRA_ENV=""
+          echo "ℹ️ _FRONTEND_URL not provided - existing service FRONTEND_URL will be kept."
+        fi
+
+        gcloud run deploy project-progress-api-${_ENVIRONMENT} \
+          --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/api:${TAG_NAME} \
+          --region=${_REGION} \
+          --platform=managed \
+          --allow-unauthenticated \
+          --service-account=${_API_SA_EMAIL} \
+          --set-env-vars=PROJECT_ID=${PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},PUBSUB_TOPIC=${_PUBSUB_TOPIC},ENVIRONMENT=${_ENVIRONMENT},ALLOWED_OAUTH_DOMAINS=${_ALLOWED_OAUTH_DOMAINS}$EXTRA_ENV \
+          --set-secrets=OAUTH_CLIENT_ID=oauth-client-id:latest,OAUTH_CLIENT_SECRET=oauth-client-secret:latest,JWT_SECRET_KEY=jwt-secret-key:latest \
+          --min-instances=1 \
+          --max-instances=10 \
+          --cpu=1 \
+          --memory=512Mi \
+          --concurrency=80 \
+          --timeout=60s
     waitFor: ['push-api']
 
   # Build and push Frontend (needs API URL)
-  - name: 'gcr.io/cloud-builders/docker'
+  # NOTE: Next.js requires API URL at BUILD time, not just runtime
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'build-frontend'
     entrypoint: bash
     args:
       - '-c'
       - |
+        # Get API URL from deployed service (MUST succeed - no placeholder!)
         API_URL=$$(gcloud run services describe project-progress-api-${_ENVIRONMENT} --region=${_REGION} --format='value(status.url)')
-        echo "Building frontend with API_URL: $$API_URL"
+        if [ -z "$$API_URL" ]; then
+          echo "❌ ERROR: Could not get API URL. Make sure API is deployed first."
+          exit 1
+        fi
+        echo "✅ Building frontend with API_URL: $$API_URL"
+        
         docker build \
           --build-arg NEXT_PUBLIC_API_URL=$$API_URL \
           -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:${TAG_NAME} \
@@ -199,7 +223,7 @@ print(f'✅ Security scan passed (Critical: {critical}, High: {high})')
       - '--platform=managed'
       - '--no-allow-unauthenticated'
       - '--service-account=${_WORKER_SA_EMAIL}'
-      - '--set-env-vars=PROJECT_ID=${PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},REGION=${_REGION},ENVIRONMENT=${_ENVIRONMENT}'
+      - '--set-env-vars=PROJECT_ID=${PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},REGION=${_REGION},ENVIRONMENT=${_ENVIRONMENT},GEMINI_LOCATION=${_GEMINI_LOCATION},GEMINI_MODEL=${_GEMINI_MODEL}'
       - '--min-instances=0'
       - '--max-instances=10'
       - '--cpu=2'
@@ -207,30 +231,35 @@ print(f'✅ Security scan passed (Critical: {critical}, High: {high})')
       - '--timeout=300s'
     waitFor: ['push-worker']
 
-  # Deploy Frontend
+  # Deploy Frontend (with dynamic API URL)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'deploy-frontend'
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - 'run'
-      - 'deploy'
-      - 'project-progress-frontend-${_ENVIRONMENT}'
-      - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:${TAG_NAME}'
-      - '--region=${_REGION}'
-      - '--platform=managed'
-      - '--allow-unauthenticated'
-      - '--min-instances=1'
-      - '--max-instances=10'
-      - '--cpu=1'
-      - '--memory=512Mi'
+      - '-c'
+      - |
+        # Get API URL dynamically from deployed service
+        API_URL=$$(gcloud run services describe project-progress-api-${_ENVIRONMENT} --region=${_REGION} --format='value(status.url)')
+        echo "Deploying frontend with API_URL: $$API_URL"
+        
+        gcloud run deploy project-progress-frontend-${_ENVIRONMENT} \
+          --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:${TAG_NAME} \
+          --region=${_REGION} \
+          --platform=managed \
+          --allow-unauthenticated \
+          --min-instances=1 \
+          --max-instances=10 \
+          --cpu=1 \
+          --memory=512Mi \
+          --set-env-vars=NEXT_PUBLIC_API_URL=$$API_URL
     waitFor: ['build-frontend']
 
   # ===========================================================================
   # Phase 6: Post-deployment Verification
   # ===========================================================================
 
-  # Smoke test API
-  - name: 'gcr.io/cloud-builders/curl'
+  # Smoke test API (using cloud-sdk which has gcloud)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'smoke-test-api'
     entrypoint: bash
     args:
@@ -251,8 +280,8 @@ print(f'✅ API smoke test passed (version: {data[\"version\"]})')
 "
     waitFor: ['deploy-api']
 
-  # Smoke test Frontend
-  - name: 'gcr.io/cloud-builders/curl'
+  # Smoke test Frontend (using cloud-sdk which has gcloud)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'smoke-test-frontend'
     entrypoint: bash
     args:
@@ -336,6 +365,8 @@ substitutions:
   _ALLOWED_OAUTH_DOMAINS: ''  # REQUIRED: Set via trigger
   _API_SA_EMAIL: ''           # REQUIRED: Set via trigger
   _WORKER_SA_EMAIL: ''        # REQUIRED: Set via trigger
+  _GEMINI_LOCATION: 'us-central1'
+  _GEMINI_MODEL: 'gemini-2.5-pro'
   _MAX_HIGH_VULNS: '5'        # Max allowed HIGH severity vulnerabilities
   _RUN_E2E: 'false'           # Set to 'true' to run E2E tests
 

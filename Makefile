@@ -247,13 +247,16 @@ deploy-worker:
 
 deploy-frontend:
 	@echo "Deploying Frontend to Cloud Run..."
+	@echo "Getting API URL dynamically..."
 	@API_URL=$$(gcloud run services describe project-progress-api-$(ENVIRONMENT) --region=$(REGION) --format='value(status.url)'); \
+	echo "Using API URL: $$API_URL"; \
 	gcloud run deploy project-progress-frontend-$(ENVIRONMENT) \
 		--image=$(ARTIFACT_REGISTRY)/frontend:$(GIT_SHA) \
 		--region=$(REGION) \
 		--platform=managed \
 		--allow-unauthenticated \
 		--set-env-vars="NEXT_PUBLIC_API_URL=$$API_URL"
+	@echo "✅ Frontend deployed with dynamic API URL"
 
 deploy-all: deploy-api deploy-worker deploy-frontend
 	@echo "All services deployed successfully!"

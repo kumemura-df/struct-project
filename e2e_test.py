@@ -5,6 +5,9 @@ import json
 import urllib.request
 import urllib.error
 import subprocess
+from datetime import datetime, timedelta, timezone
+
+from jose import jwt
 
 # Add backend directory to sys.path to allow importing modules
 # We need to add the parent directory of 'api' to sys.path
@@ -30,6 +33,28 @@ def get_jwt_secret():
     except subprocess.CalledProcessError as e:
         print(f"Error fetching secret: {e}")
         exit(1)
+
+
+def create_test_access_token(user_data, secret, env: str = "prod", hours: int = 8) -> str:
+    """
+    Create a JWT compatible with the production API verifier.
+    
+    The backend expects:
+      - HS256 signed with JWT_SECRET_KEY
+      - 'env' claim set to 'prod' (or 'production') in production
+      - 'exp' / 'iat' timestamps
+    We re-implement minimal logic here to avoid importing backend auth modules,
+    which enforce OAuth config at import time when ENVIRONMENT=prod.
+    """
+    now = datetime.now(timezone.utc)
+    exp = now + timedelta(hours=hours)
+    payload = {
+        **user_data,
+        "exp": exp,
+        "iat": now,
+        "env": env,
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")
 
 def make_request(method, endpoint, headers=None, data=None, files=None):
     url = f"{API_URL}{endpoint}"
@@ -114,21 +139,14 @@ def run_test():
     
     # 1. Setup Auth
     secret = get_jwt_secret()
-    os.environ["JWT_SECRET_KEY"] = secret
-    
-    try:
-        from api.auth.jwt import create_access_token
-    except ImportError as e:
-        print(f"❌ ImportError: Could not import backend modules: {e}")
-        print(f"sys.path: {sys.path}")
-        return
 
     user_data = {
         "sub": "e2e-user",
         "email": "e2e@example.com",
         "name": "E2E User"
     }
-    token = create_access_token(user_data)
+    # Create a token that looks like a real production token
+    token = create_test_access_token(user_data, secret, env="prod", hours=8)
     headers = {"Authorization": f"Bearer {token}"}
     print("✅ Generated Auth Token")
 

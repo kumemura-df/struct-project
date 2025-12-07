@@ -49,8 +49,3 @@ resource "google_pubsub_topic_iam_member" "dead_letter_publisher" {
   role   = "roles/pubsub.publisher"
   member = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
-
-# Get project number for Pub/Sub service account
-data "google_project" "project" {
-  project_id = var.project_id
-}

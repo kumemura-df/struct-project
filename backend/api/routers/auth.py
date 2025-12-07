@@ -1,9 +1,12 @@
 """Authentication endpoints with security hardening."""
 import os
+import sys
 import logging
+from typing import Optional
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, Request, HTTPException, status, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
-from typing import Optional
 
 from auth import (
     get_authorization_url,
@@ -23,6 +26,35 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "dev")
 
 # Feature flags
 DEV_LOGIN_ENABLED = os.getenv("DEV_LOGIN_ENABLED", "").lower() == "true" or ENVIRONMENT == "dev"
+
+
+def _get_frontend_origin() -> str:
+    """Get origin (scheme://host[:port]) of the configured frontend URL."""
+    try:
+        parsed = urlparse(FRONTEND_URL)
+        if not parsed.scheme or not parsed.netloc:
+            return ""
+        return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        return ""
+
+
+FRONTEND_ORIGIN = _get_frontend_origin()
+
+# Validate configuration in production
+if ENVIRONMENT in ("prod", "production"):
+    invalid_reasons = []
+    if not FRONTEND_URL:
+        invalid_reasons.append("FRONTEND_URL is empty")
+    if "localhost" in FRONTEND_URL:
+        invalid_reasons.append("FRONTEND_URL must not contain 'localhost' in production")
+    if not FRONTEND_ORIGIN:
+        invalid_reasons.append("FRONTEND_URL is not a valid absolute URL")
+
+    if invalid_reasons:
+        logger.critical("Invalid FRONTEND_URL configuration in production: %s", "; ".join(invalid_reasons))
+        # Fail fast so misconfigured containers don't start serving traffic.
+        sys.exit(1)
 
 
 def _get_secure_cookie_settings(request: Request) -> dict:
@@ -70,11 +102,32 @@ async def login(request: Request, redirect_to: Optional[str] = None):
         )
     
     redirect_uri = _build_redirect_uri(request)
-    
-    # Validate redirect_to to prevent open redirect attacks
-    state = redirect_to or FRONTEND_URL
-    if not state.startswith(FRONTEND_URL) and not state.startswith("/"):
-        logger.warning(f"Invalid redirect_to blocked: {state}")
+
+    # Build safe redirect URL for state
+    state: str
+
+    if redirect_to:
+        # Absolute URL case
+        if redirect_to.startswith("http://") or redirect_to.startswith("https://"):
+            try:
+                target = urlparse(redirect_to)
+                fe = urlparse(FRONTEND_URL)
+                if target.scheme == fe.scheme and target.netloc == fe.netloc:
+                    state = redirect_to
+                else:
+                    logger.warning("Redirect_to origin mismatch: %s (expected origin: %s)", redirect_to, FRONTEND_ORIGIN)
+                    state = FRONTEND_URL
+            except Exception:
+                logger.warning("Failed to parse redirect_to, falling back to FRONTEND_URL: %s", redirect_to)
+                state = FRONTEND_URL
+        # Relative path (starts with '/')
+        elif redirect_to.startswith("/"):
+            # Normalize to absolute URL on frontend origin
+            state = f"{FRONTEND_ORIGIN or FRONTEND_URL.rstrip('/')}{redirect_to}"
+        else:
+            logger.warning("Invalid redirect_to blocked (not absolute or path): %s", redirect_to)
+            state = FRONTEND_URL
+    else:
         state = FRONTEND_URL
     
     auth_url = get_authorization_url(
@@ -124,16 +177,24 @@ async def callback(request: Request, code: str, state: Optional[str] = None, err
             "auth_method": "google_oauth",
         })
         
-        # Validate redirect URL
-        redirect_url = state or "/"
-        
-        # If relative path, prepend FRONTEND_URL
-        if redirect_url.startswith("/"):
-            redirect_url = f"{FRONTEND_URL}{redirect_url}"
-        # If not starting with FRONTEND_URL, reset to home
-        elif not redirect_url.startswith(FRONTEND_URL):
-            logger.warning(f"Invalid redirect URL blocked: {redirect_url}")
-            redirect_url = FRONTEND_URL
+        # Validate redirect URL from state
+        redirect_url = state or FRONTEND_URL
+
+        if redirect_url.startswith("http://") or redirect_url.startswith("https://"):
+            try:
+                target = urlparse(redirect_url)
+                fe = urlparse(FRONTEND_URL)
+                if not (target.scheme == fe.scheme and target.netloc == fe.netloc):
+                    logger.warning("State redirect origin mismatch: %s (expected origin: %s)", redirect_url, FRONTEND_ORIGIN)
+                    redirect_url = FRONTEND_URL
+            except Exception:
+                logger.warning("Failed to parse state redirect URL, falling back to FRONTEND_URL: %s", redirect_url)
+                redirect_url = FRONTEND_URL
+        else:
+            # Treat as relative path
+            if not redirect_url.startswith("/"):
+                redirect_url = "/"
+            redirect_url = f"{FRONTEND_ORIGIN or FRONTEND_URL.rstrip('/')}{redirect_url}"
         
         # Create response with ONLY HttpOnly cookie (no token in URL)
         response = RedirectResponse(
