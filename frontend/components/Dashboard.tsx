@@ -8,6 +8,7 @@ import UserMenu from './UserMenu';
 import ExportButton from './ExportButton';
 import GlobalSearch from './GlobalSearch';
 import DashboardCustomizer, { useDashboardSettings } from './DashboardCustomizer';
+import AIChatWidget from './AIChatWidget';
 import Link from 'next/link';
 import { exportProjects, exportTasks } from '../lib/api';
 
@@ -180,6 +181,9 @@ export default function Dashboard() {
                 onSetViewMode={setViewMode}
                 onReset={resetToDefaults}
             />
+
+            {/* AI Chat Widget */}
+            <AIChatWidget />
         </div>
     );
 }
