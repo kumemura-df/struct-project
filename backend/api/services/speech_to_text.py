@@ -6,10 +6,24 @@ Supports speaker diarization (identifying who said what).
 """
 
 import os
-from typing import Optional
+from typing import Optional, Any
 from dataclasses import dataclass
-from google.cloud import speech_v2 as speech
-from google.cloud.speech_v2.types import cloud_speech
+
+# Lazy import to avoid startup errors if library not installed
+speech = None
+cloud_speech = None
+
+def _ensure_speech_client():
+    """Lazy load speech client to avoid import errors at startup."""
+    global speech, cloud_speech
+    if speech is None:
+        try:
+            from google.cloud import speech_v2
+            from google.cloud.speech_v2 import types
+            speech = speech_v2
+            cloud_speech = types
+        except ImportError:
+            raise ImportError("google-cloud-speech is not installed. Run: pip install google-cloud-speech")
 
 # Configuration
 PROJECT_ID = os.getenv("PROJECT_ID", "")
@@ -89,6 +103,9 @@ def transcribe_audio(
         # In local mode, return mock data or use alternative
         return _mock_transcription(audio_content, filename)
     
+    # Lazy load speech client
+    _ensure_speech_client()
+    
     # Initialize Speech-to-Text client
     client = speech.SpeechClient()
     
@@ -154,6 +171,9 @@ def transcribe_audio_gcs(
     if USE_LOCAL_MODE:
         return _mock_transcription(b"", "audio.mp3")
     
+    # Lazy load speech client
+    _ensure_speech_client()
+    
     client = speech.SpeechClient()
     
     recognizer_region = "us-central1" if model == "chirp" else REGION
@@ -206,7 +226,7 @@ def transcribe_audio_gcs(
 
 
 def _process_response(
-    response: cloud_speech.RecognizeResponse,
+    response: Any,  # cloud_speech.RecognizeResponse type
     language_code: str
 ) -> TranscriptionResult:
     """Process synchronous recognition response."""
@@ -277,7 +297,7 @@ def _process_response(
 
 
 def _process_batch_response(
-    transcript: cloud_speech.Transcript,
+    transcript: Any,  # cloud_speech.Transcript type
     language_code: str
 ) -> TranscriptionResult:
     """Process batch recognition response."""

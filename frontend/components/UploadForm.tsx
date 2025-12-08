@@ -57,7 +57,7 @@ export default function UploadForm() {
                 const formatName = TRANSCRIPT_SOURCES.find(s => s.id === result.transcript_format)?.name || result.transcript_format;
                 toast.success(`アップロード成功！形式: ${formatName}`);
             } else {
-                toast.success('アップロード成功！処理を開始しました。');
+            toast.success('アップロード成功！処理を開始しました。');
             }
 
             // Reset form
