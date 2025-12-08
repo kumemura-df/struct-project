@@ -7,6 +7,7 @@ ARG NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://project-progress-api-prod-29226667525.asia-northeast1.run.app}
 
 COPY package*.json ./
+COPY .npmrc ./
 RUN npm ci
 COPY . .
 
