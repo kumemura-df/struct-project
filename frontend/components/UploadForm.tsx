@@ -1,12 +1,12 @@
 'use client';
 
 import { useState } from 'react';
-import { uploadFile, uploadText } from '../lib/api';
+import { uploadFile, uploadText, uploadAudio } from '../lib/api';
 import { toast } from '../lib/toast';
 import LoadingSpinner from './LoadingSpinner';
 import { useRouter } from 'next/navigation';
 
-type InputMode = 'file' | 'text';
+type InputMode = 'file' | 'text' | 'audio';
 
 // Supported transcript sources
 const TRANSCRIPT_SOURCES = [
@@ -16,6 +16,9 @@ const TRANSCRIPT_SOURCES = [
     { id: 'zoom', name: 'Zoom', description: 'Zoomの文字起こし' },
     { id: 'plain', name: 'プレーンテキスト', description: '通常のテキスト' },
 ];
+
+// Supported audio formats
+const AUDIO_FORMATS = ['.mp3', '.m4a', '.wav', '.flac', '.webm', '.ogg', '.opus'];
 
 export default function UploadForm() {
     const router = useRouter();
@@ -32,6 +35,7 @@ export default function UploadForm() {
 
         if (inputMode === 'file' && !file) return;
         if (inputMode === 'text' && !text.trim()) return;
+        if (inputMode === 'audio' && !file) return;
 
         setUploading(true);
         try {
@@ -40,10 +44,16 @@ export default function UploadForm() {
                 result = await uploadFile(file, date, title, sourceType);
             } else if (inputMode === 'text') {
                 result = await uploadText(text, date, title, sourceType);
+            } else if (inputMode === 'audio' && file) {
+                result = await uploadAudio(file, date, title);
             }
             
-            // Show success message with transcript info
-            if (result?.transcript_format) {
+            // Show success message based on result type
+            if (inputMode === 'audio' && result?.transcription) {
+                const speakers = result.transcription.speakers?.length || 0;
+                const duration = Math.round(result.transcription.duration_seconds || 0);
+                toast.success(`音声処理完了！話者: ${speakers}人, 長さ: ${duration}秒`);
+            } else if (result?.transcript_format) {
                 const formatName = TRANSCRIPT_SOURCES.find(s => s.id === result.transcript_format)?.name || result.transcript_format;
                 toast.success(`アップロード成功！形式: ${formatName}`);
             } else {
@@ -70,7 +80,8 @@ export default function UploadForm() {
         }
     };
 
-    const isSubmitDisabled = uploading || (inputMode === 'file' ? !file : !text.trim());
+    const isSubmitDisabled = uploading || 
+        (inputMode === 'file' ? !file : inputMode === 'audio' ? !file : !text.trim());
 
     return (
         <div className="p-6 glass rounded-xl">
@@ -87,7 +98,7 @@ export default function UploadForm() {
                             : 'text-gray-400 hover:text-white'
                     }`}
                 >
-                    📝 テキスト入力
+                    📝 テキスト
                 </button>
                 <button
                     type="button"
@@ -98,7 +109,18 @@ export default function UploadForm() {
                             : 'text-gray-400 hover:text-white'
                     }`}
                 >
-                    📁 ファイルアップロード
+                    📄 字幕ファイル
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setInputMode('audio')}
+                    className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${
+                        inputMode === 'audio'
+                            ? 'bg-purple-600 text-white shadow-md'
+                            : 'text-gray-400 hover:text-white'
+                    }`}
+                >
+                    🎤 音声ファイル
                 </button>
             </div>
 
@@ -173,10 +195,10 @@ export default function UploadForm() {
                             {text.length > 0 ? `${text.length} 文字` : 'Otter.ai, tl;dv, Zoomなどの文字起こしテキストをペーストできます'}
                         </p>
                     </div>
-                ) : (
+                ) : inputMode === 'file' ? (
                     <div>
                         <label className="block text-sm font-medium text-gray-200 mb-2">
-                            ファイル (.txt, .md, .vtt, .srt)
+                            字幕/テキストファイル (.txt, .md, .vtt, .srt)
                         </label>
                         <input
                             type="file"
@@ -204,6 +226,42 @@ export default function UploadForm() {
                                 <li>• <strong>.srt</strong> - 標準字幕形式</li>
                                 <li>• <strong>.txt</strong> - Otter.ai, tl;dv, Zoom出力</li>
                             </ul>
+                        </div>
+                    </div>
+                ) : (
+                    <div>
+                        <label className="block text-sm font-medium text-gray-200 mb-2">
+                            🎤 音声ファイル
+                        </label>
+                        <input
+                            type="file"
+                            onChange={(e) => setFile(e.target.files?.[0] || null)}
+                            className="w-full text-sm text-gray-300
+                                file:mr-4 file:py-2 file:px-4
+                                file:rounded-lg file:border-0
+                                file:text-sm file:font-semibold
+                                file:bg-purple-600 file:text-white
+                                hover:file:bg-purple-700 file:cursor-pointer"
+                            accept={AUDIO_FORMATS.join(',')}
+                            required={inputMode === 'audio'}
+                        />
+                        {file && (
+                            <p className="mt-2 text-sm text-gray-400">
+                                選択中: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                            </p>
+                        )}
+                        <div className="mt-3 p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg">
+                            <p className="text-xs text-purple-300">
+                                <strong>🔊 Speech-to-Text で自動文字起こし</strong>
+                            </p>
+                            <ul className="mt-2 text-xs text-gray-400 space-y-0.5">
+                                <li>• 会議録音を直接アップロード</li>
+                                <li>• 話者を自動識別（誰が話しているか）</li>
+                                <li>• 日本語に最適化</li>
+                            </ul>
+                            <p className="mt-2 text-xs text-gray-400">
+                                <strong className="text-gray-300">対応形式:</strong> {AUDIO_FORMATS.join(', ')}
+                            </p>
                         </div>
                     </div>
                 )}

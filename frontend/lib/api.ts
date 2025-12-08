@@ -224,6 +224,47 @@ export async function getUploadFormats(): Promise<{
   return res.json();
 }
 
+export interface AudioUploadResponse {
+  meeting_id: string;
+  status: 'PENDING' | 'DONE' | 'ERROR';
+  message?: string;
+  message_id?: string;
+  transcription?: {
+    duration_seconds: number;
+    speakers: string[];
+    segment_count: number;
+  };
+  extracted?: {
+    projects: number;
+    tasks: number;
+    risks: number;
+    decisions: number;
+  };
+}
+
+export async function uploadAudio(
+  file: File,
+  date: string,
+  title?: string,
+  language: string = 'ja-JP',
+  enableDiarization: boolean = true
+): Promise<AudioUploadResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('meeting_date', date);
+  formData.append('language', language);
+  formData.append('enable_diarization', enableDiarization.toString());
+  if (title) formData.append('title', title);
+
+  const res = await authenticatedFetch(`${API_URL}/upload/audio`, {
+    method: 'POST',
+    body: formData,
+    headers: {}, // Remove Content-Type for FormData
+  });
+
+  return res.json();
+}
+
 // ===== PROJECTS =====
 
 export async function getProjects(filters?: {
