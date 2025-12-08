@@ -2,38 +2,317 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ===== Design Tokens ===== */
 :root {
-  --foreground-rgb: 255, 255, 255;
-  --background-start-rgb: 15, 23, 42;
-  --background-end-rgb: 30, 41, 59;
+  /* Colors - Warm accent with high contrast */
+  --color-primary: 251, 146, 60;      /* Orange-400 */
+  --color-primary-dark: 234, 88, 12;  /* Orange-600 */
+  --color-secondary: 59, 130, 246;    /* Blue-500 */
+  --color-accent: 168, 85, 247;       /* Purple-500 */
+  
+  /* Semantic Colors */
+  --color-success: 34, 197, 94;       /* Green-500 */
+  --color-warning: 250, 204, 21;      /* Yellow-400 */
+  --color-danger: 239, 68, 68;        /* Red-500 */
+  --color-info: 14, 165, 233;         /* Sky-500 */
+  
+  /* Neutral Colors */
+  --foreground-rgb: 248, 250, 252;    /* Slate-50 */
+  --foreground-muted: 148, 163, 184;  /* Slate-400 */
+  
+  /* Background */
+  --background-start-rgb: 15, 23, 42;  /* Slate-900 */
+  --background-end-rgb: 30, 41, 59;    /* Slate-800 */
+  --background-card: 30, 41, 59;       /* Slate-800 */
+  
+  /* Surfaces */
+  --surface-elevated: 51, 65, 85;      /* Slate-700 */
+  --surface-hover: 71, 85, 105;        /* Slate-600 */
+  
+  /* Borders */
+  --border-subtle: 51, 65, 85;         /* Slate-700 */
+  --border-default: 71, 85, 105;       /* Slate-600 */
+  
+  /* Spacing Scale */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  
+  /* Border Radius */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.2);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.3), 0 4px 6px -4px rgb(0 0 0 / 0.2);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.3), 0 8px 10px -6px rgb(0 0 0 / 0.2);
+  --shadow-glow: 0 0 20px rgb(var(--color-primary) / 0.3);
+  
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
 }
 
+/* ===== Base Styles ===== */
 body {
   color: rgb(var(--foreground-rgb));
-  background: linear-gradient(to bottom right,
-      rgb(var(--background-start-rgb)),
-      rgb(var(--background-end-rgb)));
+  background: linear-gradient(
+    135deg,
+    rgb(var(--background-start-rgb)) 0%,
+    rgb(var(--background-end-rgb)) 50%,
+    rgb(15, 25, 45) 100%
+  );
   min-height: 100vh;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-@layer utilities {
+/* Subtle background pattern */
+body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: 
+    radial-gradient(ellipse at 20% 30%, rgb(var(--color-accent) / 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 70%, rgb(var(--color-primary) / 0.06) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* ===== Component Classes ===== */
+@layer components {
+  /* Glass Card */
   .glass {
-    @apply bg-white/10 backdrop-blur-lg border border-white/20 shadow-xl;
+    background: rgb(var(--background-card) / 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgb(var(--border-subtle) / 0.5);
+    box-shadow: var(--shadow-lg);
+    transition: all var(--transition-normal);
+  }
+  
+  .glass:hover {
+    background: rgb(var(--surface-elevated) / 0.8);
+    border-color: rgb(var(--border-default) / 0.6);
+  }
+  
+  /* Gradient Text */
+  .gradient-text {
+    background: linear-gradient(135deg, rgb(var(--color-primary)), rgb(var(--color-accent)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  
+  /* Primary Button */
+  .btn-primary {
+    background: linear-gradient(135deg, rgb(var(--color-primary)), rgb(var(--color-primary-dark)));
+    color: white;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-lg);
+    font-weight: 600;
+    box-shadow: var(--shadow-md), 0 0 0 0 rgb(var(--color-primary) / 0);
+    transition: all var(--transition-normal);
+  }
+  
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-lg), var(--shadow-glow);
+  }
+  
+  .btn-primary:active {
+    transform: translateY(0);
+  }
+  
+  /* Secondary Button */
+  .btn-secondary {
+    background: rgb(var(--surface-elevated) / 0.5);
+    color: rgb(var(--foreground-rgb));
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-lg);
+    border: 1px solid rgb(var(--border-default) / 0.5);
+    font-weight: 500;
+    transition: all var(--transition-normal);
+  }
+  
+  .btn-secondary:hover {
+    background: rgb(var(--surface-hover) / 0.7);
+    border-color: rgb(var(--border-default));
+  }
+  
+  /* Input Fields */
+  .input {
+    background: rgb(var(--surface-elevated) / 0.3);
+    border: 1px solid rgb(var(--border-subtle) / 0.5);
+    border-radius: var(--radius-lg);
+    padding: var(--space-2) var(--space-4);
+    color: rgb(var(--foreground-rgb));
+    transition: all var(--transition-fast);
+  }
+  
+  .input::placeholder {
+    color: rgb(var(--foreground-muted) / 0.7);
+  }
+  
+  .input:focus {
+    outline: none;
+    border-color: rgb(var(--color-primary));
+    box-shadow: 0 0 0 2px rgb(var(--color-primary) / 0.2);
+  }
+  
+  /* Badge */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-md);
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+  }
+  
+  .badge-success {
+    background: rgb(var(--color-success) / 0.2);
+    color: rgb(var(--color-success));
+  }
+  
+  .badge-warning {
+    background: rgb(var(--color-warning) / 0.2);
+    color: rgb(var(--color-warning));
+  }
+  
+  .badge-danger {
+    background: rgb(var(--color-danger) / 0.2);
+    color: rgb(var(--color-danger));
+  }
+  
+  .badge-info {
+    background: rgb(var(--color-info) / 0.2);
+    color: rgb(var(--color-info));
   }
 }
 
+/* ===== Animations ===== */
 @keyframes slide-in {
   from {
     transform: translateX(100%);
     opacity: 0;
   }
-
   to {
     transform: translateX(0);
     opacity: 1;
   }
 }
 
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes scale-in {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgb(var(--color-primary) / 0);
+  }
+  50% {
+    box-shadow: 0 0 20px 4px rgb(var(--color-primary) / 0.3);
+  }
+}
+
 .animate-slide-in {
   animation: slide-in 0.3s ease-out;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.2s ease-out;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Staggered reveal for lists */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgb(var(--background-start-rgb));
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--surface-elevated));
+  border-radius: var(--radius-md);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--surface-hover));
+}
+
+/* ===== Selection ===== */
+::selection {
+  background: rgb(var(--color-primary) / 0.3);
+  color: rgb(var(--foreground-rgb));
+}
+
+/* ===== Focus Visible ===== */
+:focus-visible {
+  outline: 2px solid rgb(var(--color-primary));
+  outline-offset: 2px;
 }

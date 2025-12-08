@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
-import { getTasks, updateTask, deleteTask, Task, TaskUpdate } from '../lib/api';
-import { toast } from '../lib/toast';
+import { useState, useMemo, useEffect } from 'react';
+import { useTasks, useUpdateTask, useDeleteTask } from '../lib/hooks';
+import { Task, TaskUpdate } from '../lib/api';
 import LoadingSpinner from './LoadingSpinner';
+import MobileTaskCard from './MobileTaskCard';
 
 interface TaskListProps {
     projectId?: string;
@@ -42,56 +43,40 @@ const isDueThisWeek = (dueDate: string | undefined): boolean => {
 };
 
 export default function TaskList({ projectId, showFilters = true }: TaskListProps) {
-    const [tasks, setTasks] = useState<Task[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [total, setTotal] = useState(0);
-    const [offset, setOffset] = useState(0);
-    const [hasMore, setHasMore] = useState(false);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState<string[]>([]);
     const [priorityFilter, setPriorityFilter] = useState<string[]>([]);
     const [ownerFilter, setOwnerFilter] = useState<string>('');
     const [quickFilter, setQuickFilter] = useState<'all' | 'overdue' | 'thisWeek'>('all');
-    const limit = 20;
+    const [isMobile, setIsMobile] = useState(false);
+
+    // Detect mobile
+    useEffect(() => {
+        const checkMobile = () => setIsMobile(window.innerWidth < 768);
+        checkMobile();
+        window.addEventListener('resize', checkMobile);
+        return () => window.removeEventListener('resize', checkMobile);
+    }, []);
+
+    const { data, isLoading, error } = useTasks({
+        project_id: projectId,
+        search: search || undefined,
+        status: statusFilter.length > 0 ? statusFilter : undefined,
+        priority: priorityFilter.length > 0 ? priorityFilter : undefined,
+        owner: ownerFilter || undefined,
+        limit: 100, // Fetch more for client-side filtering
+    });
+
+    const updateTaskMutation = useUpdateTask();
+    const deleteTaskMutation = useDeleteTask();
+
+    const tasks = data?.items || [];
 
     // 担当者のユニークリストを取得
     const uniqueOwners = useMemo(() => {
         const owners = tasks.map(t => t.owner).filter((o): o is string => !!o);
         return [...new Set(owners)].sort();
     }, [tasks]);
-
-    const loadTasks = useCallback(async (reset = false) => {
-        setLoading(true);
-        try {
-            const currentOffset = reset ? 0 : offset;
-            const data = await getTasks({
-                project_id: projectId,
-                search: search || undefined,
-                status: statusFilter.length > 0 ? statusFilter : undefined,
-                priority: priorityFilter.length > 0 ? priorityFilter : undefined,
-                owner: ownerFilter || undefined,
-                limit,
-                offset: currentOffset,
-            });
-            if (reset) {
-                setTasks(data.items);
-                setOffset(0);
-            } else {
-                setTasks(prev => currentOffset === 0 ? data.items : [...prev, ...data.items]);
-            }
-            setTotal(data.total);
-            setHasMore(data.has_more);
-        } catch (error) {
-            console.error('Failed to load tasks:', error);
-            toast.error('タスクの読み込みに失敗しました');
-        } finally {
-            setLoading(false);
-        }
-    }, [projectId, search, statusFilter, priorityFilter, ownerFilter, offset]);
-
-    useEffect(() => {
-        loadTasks(true);
-    }, [projectId, search, statusFilter, priorityFilter, ownerFilter]);
 
     const getNextStatus = (current: string): TaskUpdate['status'] => {
         if (current === 'NOT_STARTED') return 'IN_PROGRESS';
@@ -122,40 +107,12 @@ export default function TaskList({ projectId, showFilters = true }: TaskListProp
 
     const handleStatusClick = async (task: Task) => {
         const newStatus = getNextStatus(task.status);
-        try {
-            await updateTask(task.task_id, { status: newStatus });
-            toast.success('ステータスを更新しました');
-
-            setTasks(prev => {
-                if (newStatus === 'DONE') {
-                    return prev.filter(t => t.task_id !== task.task_id);
-                }
-                return prev.map(t =>
-                    t.task_id === task.task_id ? { ...t, status: newStatus } : t
-                );
-            });
-        } catch (error) {
-            console.error('Failed to update task:', error);
-            toast.error('ステータスの更新に失敗しました');
-        }
+        updateTaskMutation.mutate({ taskId: task.task_id, updates: { status: newStatus } });
     };
 
     const handleDelete = async (taskId: string) => {
         if (!confirm('このタスクを削除してもよろしいですか？')) return;
-        try {
-            await deleteTask(taskId);
-            toast.success('タスクを削除しました');
-            setTasks(prev => prev.filter(t => t.task_id !== taskId));
-            setTotal(prev => prev - 1);
-        } catch (error) {
-            console.error('Failed to delete task:', error);
-            toast.error('タスクの削除に失敗しました');
-        }
-    };
-
-    const loadMore = () => {
-        setOffset(prev => prev + limit);
-        loadTasks(false);
+        deleteTaskMutation.mutate(taskId);
     };
 
     // フィルタリング（クイックフィルタ含む）
@@ -182,10 +139,21 @@ export default function TaskList({ projectId, showFilters = true }: TaskListProp
         };
     }, [tasks]);
 
-    if (loading && visibleTasks.length === 0) {
+    if (isLoading) {
         return (
             <div className="glass p-6 rounded-xl flex justify-center">
                 <LoadingSpinner size="medium" />
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="glass p-6 rounded-xl">
+                <div className="text-center py-8">
+                    <div className="text-4xl mb-2">❌</div>
+                    <p className="text-red-400">タスクの読み込みに失敗しました</p>
+                </div>
             </div>
         );
     }
@@ -270,14 +238,29 @@ export default function TaskList({ projectId, showFilters = true }: TaskListProp
                     </div>
                 </div>
             )}
-            <div className="overflow-x-auto">
-                {visibleTasks.length === 0 ? (
-                    <div className="text-center py-12">
-                        <div className="text-6xl mb-4">📋</div>
-                        <p className="text-gray-400">タスクがありません</p>
-                    </div>
-                ) : (
-                    <>
+            {/* Mobile: Card View */}
+            {isMobile ? (
+                <div className="space-y-3">
+                    {visibleTasks.length === 0 ? (
+                        <div className="text-center py-12">
+                            <div className="text-6xl mb-4">📋</div>
+                            <p className="text-gray-400">タスクがありません</p>
+                        </div>
+                    ) : (
+                        visibleTasks.map((task) => (
+                            <MobileTaskCard key={task.task_id} task={task} />
+                        ))
+                    )}
+                </div>
+            ) : (
+                /* Desktop: Table View */
+                <div className="overflow-x-auto">
+                    {visibleTasks.length === 0 ? (
+                        <div className="text-center py-12">
+                            <div className="text-6xl mb-4">📋</div>
+                            <p className="text-gray-400">タスクがありません</p>
+                        </div>
+                    ) : (
                         <table className="min-w-full text-left text-sm whitespace-nowrap">
                             <thead className="uppercase tracking-wider border-b border-white/10 bg-white/5">
                                 <tr>
@@ -321,7 +304,8 @@ export default function TaskList({ projectId, showFilters = true }: TaskListProp
                                             <button
                                                 type="button"
                                                 onClick={() => handleStatusClick(task)}
-                                                className={`px-3 py-1 rounded-full text-xs font-semibold bg-transparent border cursor-pointer ${getStatusClasses(task.status)}`}
+                                                disabled={updateTaskMutation.isPending}
+                                                className={`px-3 py-1 rounded-full text-xs font-semibold bg-transparent border cursor-pointer ${getStatusClasses(task.status)} disabled:opacity-50`}
                                                 title="クリックでステータス変更"
                                             >
                                                 {task.status === 'NOT_STARTED' ? '未着手' : 
@@ -341,7 +325,8 @@ export default function TaskList({ projectId, showFilters = true }: TaskListProp
                                         <td className="px-6 py-4">
                                             <button
                                                 onClick={() => handleDelete(task.task_id)}
-                                                className="text-red-400 hover:text-red-300 transition-colors"
+                                                disabled={deleteTaskMutation.isPending}
+                                                className="text-red-400 hover:text-red-300 transition-colors disabled:opacity-50"
                                                 title="タスクを削除"
                                             >
                                                 🗑️
@@ -351,20 +336,9 @@ export default function TaskList({ projectId, showFilters = true }: TaskListProp
                                 ))}
                             </tbody>
                         </table>
-                        {hasMore && (
-                            <div className="mt-4 text-center">
-                                <button
-                                    onClick={loadMore}
-                                    disabled={loading}
-                                    className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50"
-                                >
-                                    {loading ? '読み込み中...' : 'もっと読み込む'}
-                                </button>
-                            </div>
-                        )}
-                    </>
-                )}
-            </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 }

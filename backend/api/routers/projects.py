@@ -14,16 +14,22 @@ def get_projects(
     sort_order: str = Query("desc", description="Sort order (asc/desc)"),
     limit: int = Query(20, ge=1, le=100, description="Number of items to return"),
     offset: int = Query(0, ge=0, description="Number of items to skip"),
+    include_stats: bool = Query(False, description="Include stats for each project"),
     current_user: dict = Depends(get_current_user)
 ):
-    """Get projects with pagination, search, and sorting."""
+    """Get projects with pagination, search, and sorting.
+    
+    If include_stats=True, includes task/risk counts for each project
+    to avoid N+1 API calls from the frontend.
+    """
     try:
         result = bigquery.list_projects_paginated(
             search=search,
             sort_by=sort_by,
             sort_order=sort_order,
             limit=limit,
-            offset=offset
+            offset=offset,
+            include_stats=include_stats
         )
         return result
     except Exception as e:

@@ -553,22 +553,100 @@ def list_projects_paginated(
     sort_by: str = "updated_at",
     sort_order: str = "desc",
     limit: int = 20,
-    offset: int = 0
+    offset: int = 0,
+    include_stats: bool = False
 ) -> Dict[str, Any]:
-    """List projects with pagination, search, and sorting."""
+    """List projects with pagination, search, and sorting.
+    
+    If include_stats=True, includes stats for each project to avoid N+1 queries.
+    """
     if USE_LOCAL_DB:
         return local_db.list_projects_paginated(
             search=search,
             sort_by=sort_by,
             sort_order=sort_order,
             limit=limit,
-            offset=offset
+            offset=offset,
+            include_stats=include_stats
         )
     
-    projects = list_projects()
-    total = len(projects)
+    client = get_client()
+    
+    where_clauses = []
+    query_params = []
+    
+    if search:
+        where_clauses.append("project_name LIKE @search")
+        query_params.append(bigquery.ScalarQueryParameter("search", "STRING", f"%{search}%"))
+    
+    where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    
+    # Validate sort_by
+    allowed_sort = ["created_at", "updated_at", "project_name"]
+    if sort_by not in allowed_sort:
+        sort_by = "updated_at"
+    
+    sort_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
+    
+    # Get total count
+    count_query = f"SELECT COUNT(*) as total FROM `{PROJECT_ID}.{DATASET_ID}.projects` {where_clause}"
+    if query_params:
+        job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+        count_job = client.query(count_query, job_config=job_config)
+    else:
+        count_job = client.query(count_query)
+    total = list(count_job)[0].total
+    
+    # Build main query - optionally include stats
+    if include_stats:
+        query = f"""
+            SELECT 
+                p.*,
+                COALESCE(task_stats.total_tasks, 0) as total_tasks,
+                COALESCE(task_stats.incomplete_tasks, 0) as incomplete_tasks,
+                COALESCE(task_stats.overdue_tasks, 0) as overdue_tasks,
+                COALESCE(risk_stats.total_risks, 0) as total_risks,
+                COALESCE(risk_stats.high_risks, 0) as high_risks
+            FROM `{PROJECT_ID}.{DATASET_ID}.projects` p
+            LEFT JOIN (
+                SELECT 
+                    project_id,
+                    COUNT(*) as total_tasks,
+                    COUNTIF(status != 'DONE') as incomplete_tasks,
+                    COUNTIF(status != 'DONE' AND due_date IS NOT NULL AND due_date < CURRENT_DATE()) as overdue_tasks
+                FROM `{PROJECT_ID}.{DATASET_ID}.tasks`
+                GROUP BY project_id
+            ) task_stats ON p.project_id = task_stats.project_id
+            LEFT JOIN (
+                SELECT 
+                    project_id,
+                    COUNT(*) as total_risks,
+                    COUNTIF(risk_level = 'HIGH') as high_risks
+                FROM `{PROJECT_ID}.{DATASET_ID}.risks`
+                GROUP BY project_id
+            ) risk_stats ON p.project_id = risk_stats.project_id
+            {where_clause}
+            ORDER BY {sort_by} {sort_direction}
+            LIMIT {limit} OFFSET {offset}
+        """
+    else:
+        query = f"""
+            SELECT * FROM `{PROJECT_ID}.{DATASET_ID}.projects`
+            {where_clause}
+            ORDER BY {sort_by} {sort_direction}
+            LIMIT {limit} OFFSET {offset}
+        """
+    
+    if query_params:
+        job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+        query_job = client.query(query, job_config=job_config)
+    else:
+        query_job = client.query(query)
+    
+    items = [dict(row) for row in query_job]
+    
     return {
-        "items": projects[offset:offset + limit],
+        "items": items,
         "total": total,
         "limit": limit,
         "offset": offset,

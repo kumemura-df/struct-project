@@ -267,19 +267,30 @@ export async function uploadAudio(
 
 // ===== PROJECTS =====
 
+// Extended project type with stats
+export interface ProjectWithStats extends Project {
+  total_tasks?: number;
+  incomplete_tasks?: number;
+  overdue_tasks?: number;
+  total_risks?: number;
+  high_risks?: number;
+}
+
 export async function getProjects(filters?: {
   search?: string;
   sort_by?: string;
   sort_order?: 'asc' | 'desc';
   limit?: number;
   offset?: number;
-}): Promise<PaginatedResponse<Project>> {
+  include_stats?: boolean;
+}): Promise<PaginatedResponse<ProjectWithStats>> {
   const params = new URLSearchParams();
   if (filters?.search) params.append('search', filters.search);
   if (filters?.sort_by) params.append('sort_by', filters.sort_by);
   if (filters?.sort_order) params.append('sort_order', filters.sort_order);
   if (filters?.limit) params.append('limit', filters.limit.toString());
   if (filters?.offset) params.append('offset', filters.offset.toString());
+  if (filters?.include_stats) params.append('include_stats', 'true');
 
   const res = await authenticatedFetch(`${API_URL}/projects/?${params.toString()}`);
   return res.json();

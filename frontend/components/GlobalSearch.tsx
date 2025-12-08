@@ -143,7 +143,7 @@ export default function GlobalSearch() {
     );
 
     return (
-        <div ref={containerRef} className="relative">
+        <div ref={containerRef} className="relative" data-tour="search">
             <div className="relative">
                 <input
                     ref={inputRef}

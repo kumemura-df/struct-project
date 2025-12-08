@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import AuthGuard from '../../../components/AuthGuard';
+import AppLayout from '../../../components/AppLayout';
 import LoadingSpinner from '../../../components/LoadingSpinner';
 import { toast } from '../../../lib/toast';
-import Link from 'next/link';
 
 interface IntegrationStatus {
     available: boolean;
@@ -129,18 +129,12 @@ export default function IntegrationsPage() {
 
     return (
         <AuthGuard>
-            <main className="min-h-screen p-8">
-                <div className="max-w-4xl mx-auto space-y-8">
+            <AppLayout>
+                <div className="space-y-6">
                     {/* Header */}
                     <div>
-                        <Link
-                            href="/"
-                            className="text-blue-400 hover:text-blue-300 text-sm mb-2 inline-block"
-                        >
-                            ← ダッシュボードに戻る
-                        </Link>
                         <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-teal-400">
-                            🔗 外部連携設定
+                            外部連携設定
                         </h1>
                         <p className="text-gray-400 mt-1">
                             外部サービスとの連携を設定
@@ -386,8 +380,7 @@ export default function IntegrationsPage() {
                         </div>
                     )}
                 </div>
-            </main>
+            </AppLayout>
         </AuthGuard>
     );
 }
-

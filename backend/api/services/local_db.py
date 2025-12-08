@@ -1215,18 +1215,22 @@ def list_projects_paginated(
     sort_by: str = "updated_at",
     sort_order: str = "desc",
     limit: int = 20,
-    offset: int = 0
+    offset: int = 0,
+    include_stats: bool = False
 ) -> Dict[str, Any]:
-    """List projects with pagination, search, and sorting."""
+    """List projects with pagination, search, and sorting.
+    
+    If include_stats=True, includes stats for each project to avoid N+1 queries.
+    """
     conn = _get_connection()
     _ensure_columns(conn)
     cursor = conn.cursor()
     
-    where_clauses = ["deleted_at IS NULL"]
+    where_clauses = ["p.deleted_at IS NULL"]
     params = []
     
     if search:
-        where_clauses.append("project_name LIKE ?")
+        where_clauses.append("p.project_name LIKE ?")
         params.append(f"%{search}%")
     
     where_clause = f"WHERE {' AND '.join(where_clauses)}"
@@ -1239,17 +1243,52 @@ def list_projects_paginated(
     sort_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
     
     # Get total count
-    count_query = f"SELECT COUNT(*) as total FROM projects {where_clause}"
+    count_query = f"SELECT COUNT(*) as total FROM projects p {where_clause}"
     cursor.execute(count_query, params)
     total = cursor.fetchone()["total"]
     
-    # Get items
-    query = f"""
-        SELECT * FROM projects 
-        {where_clause}
-        ORDER BY {sort_by} {sort_direction}
-        LIMIT ? OFFSET ?
-    """
+    # Build query based on include_stats
+    if include_stats:
+        query = f"""
+            SELECT 
+                p.*,
+                COALESCE(task_stats.total_tasks, 0) as total_tasks,
+                COALESCE(task_stats.incomplete_tasks, 0) as incomplete_tasks,
+                COALESCE(task_stats.overdue_tasks, 0) as overdue_tasks,
+                COALESCE(risk_stats.total_risks, 0) as total_risks,
+                COALESCE(risk_stats.high_risks, 0) as high_risks
+            FROM projects p
+            LEFT JOIN (
+                SELECT 
+                    project_id,
+                    COUNT(*) as total_tasks,
+                    SUM(CASE WHEN status != 'DONE' THEN 1 ELSE 0 END) as incomplete_tasks,
+                    SUM(CASE WHEN status != 'DONE' AND due_date IS NOT NULL AND due_date < date('now') THEN 1 ELSE 0 END) as overdue_tasks
+                FROM tasks
+                WHERE deleted_at IS NULL
+                GROUP BY project_id
+            ) task_stats ON p.project_id = task_stats.project_id
+            LEFT JOIN (
+                SELECT 
+                    project_id,
+                    COUNT(*) as total_risks,
+                    SUM(CASE WHEN risk_level = 'HIGH' THEN 1 ELSE 0 END) as high_risks
+                FROM risks
+                WHERE deleted_at IS NULL
+                GROUP BY project_id
+            ) risk_stats ON p.project_id = risk_stats.project_id
+            {where_clause}
+            ORDER BY p.{sort_by} {sort_direction}
+            LIMIT ? OFFSET ?
+        """
+    else:
+        query = f"""
+            SELECT * FROM projects p
+            {where_clause}
+            ORDER BY p.{sort_by} {sort_direction}
+            LIMIT ? OFFSET ?
+        """
+    
     params.extend([limit, offset])
     cursor.execute(query, params)
     rows = cursor.fetchall()

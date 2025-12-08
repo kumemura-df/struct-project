@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import AuthGuard from '../../components/AuthGuard';
+import AppLayout from '../../components/AppLayout';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import { toast } from '../../lib/toast';
-import Link from 'next/link';
 
 interface Meeting {
     meeting_id: string;
@@ -151,24 +151,16 @@ export default function DiffPage() {
 
     return (
         <AuthGuard>
-            <main className="min-h-screen p-8">
-                <div className="max-w-6xl mx-auto space-y-8">
+            <AppLayout>
+                <div className="space-y-6">
                     {/* Header */}
-                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                        <div>
-                            <Link
-                                href="/"
-                                className="text-blue-400 hover:text-blue-300 text-sm mb-2 inline-block"
-                            >
-                                ← ダッシュボードに戻る
-                            </Link>
-                            <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-cyan-400">
-                                🔄 会議間差分
-                            </h1>
-                            <p className="text-gray-400 mt-1">
-                                前回会議からの変更を確認
-                            </p>
-                        </div>
+                    <div>
+                        <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-cyan-400">
+                            会議間差分
+                        </h1>
+                        <p className="text-gray-400 mt-1">
+                            前回会議からの変更を確認
+                        </p>
                     </div>
 
                     {/* Meeting Selector */}
@@ -202,7 +194,7 @@ export default function DiffPage() {
                             <LoadingSpinner size="large" />
                         </div>
                     ) : diff ? (
-                        <div className="space-y-8">
+                        <div className="space-y-6">
                             {/* Summary Cards */}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <div className="glass p-4 rounded-xl text-center border-l-4 border-blue-500">
@@ -372,8 +364,7 @@ export default function DiffPage() {
                         </div>
                     )}
                 </div>
-            </main>
+            </AppLayout>
         </AuthGuard>
     );
 }
-

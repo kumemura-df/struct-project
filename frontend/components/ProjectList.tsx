@@ -1,53 +1,82 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { getProjects, deleteProject, getProjectStats, Project, ProjectStats } from '../lib/api';
-import { toast } from '../lib/toast';
+import { useState } from 'react';
+import { useProjects, useDeleteProject } from '../lib/hooks';
+import { ProjectWithStats } from '../lib/api';
 import LoadingSpinner from './LoadingSpinner';
 
 interface ProjectListProps {
     onSelectProject: (id: string | undefined) => void;
 }
 
+// Individual project card - stats now come from API response
+function ProjectCard({ 
+    project, 
+    isSelected, 
+    onSelect, 
+    onDelete 
+}: { 
+    project: ProjectWithStats;
+    isSelected: boolean;
+    onSelect: () => void;
+    onDelete: (e: React.MouseEvent) => void;
+}) {
+    return (
+        <div
+            onClick={onSelect}
+            className={`p-4 rounded-lg cursor-pointer transition-colors border group
+                ${isSelected 
+                    ? 'bg-blue-600/20 border-blue-500' 
+                    : 'bg-white/5 hover:bg-white/10 border-white/10'}`}
+        >
+            <div className="flex justify-between items-start">
+                <div className="flex-1">
+                    <h3 className="font-semibold text-white">{project.project_name}</h3>
+                    <p className="text-sm text-gray-400">
+                        更新: {new Date(project.updated_at).toLocaleDateString('ja-JP')}
+                    </p>
+                    
+                    {/* Project Stats - now included in API response */}
+                    <div className="flex flex-wrap gap-2 mt-2">
+                        <span className="text-xs px-2 py-1 rounded bg-blue-500/20 text-blue-400">
+                            📋 タスク {project.incomplete_tasks ?? 0}
+                        </span>
+                        {(project.overdue_tasks ?? 0) > 0 && (
+                            <span className="text-xs px-2 py-1 rounded bg-red-500/20 text-red-400">
+                                🔴 遅延 {project.overdue_tasks}
+                            </span>
+                        )}
+                        {(project.total_risks ?? 0) > 0 && (
+                            <span className="text-xs px-2 py-1 rounded bg-yellow-500/20 text-yellow-400">
+                                ⚠️ リスク {project.total_risks}
+                            </span>
+                        )}
+                    </div>
+                </div>
+                <button
+                    onClick={onDelete}
+                    className="text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="プロジェクトを削除"
+                >
+                    🗑️
+                </button>
+            </div>
+        </div>
+    );
+}
+
 export default function ProjectList({ onSelectProject }: ProjectListProps) {
-    const [projects, setProjects] = useState<Project[]>([]);
-    const [projectStats, setProjectStats] = useState<Record<string, ProjectStats>>({});
-    const [loading, setLoading] = useState(true);
     const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
     const [search, setSearch] = useState('');
 
-    useEffect(() => {
-        loadProjects();
-    }, [search]);
+    // Use include_stats=true to get stats with projects in a single query (N+1 fix)
+    const { data, isLoading, error } = useProjects({ 
+        search: search || undefined,
+        include_stats: true
+    });
+    const deleteProjectMutation = useDeleteProject();
 
-    async function loadProjects() {
-        try {
-            const data = await getProjects({ search: search || undefined });
-            setProjects(data.items);
-            
-            // Load stats for each project
-            const statsPromises = data.items.map(async (p: Project) => {
-                try {
-                    const stats = await getProjectStats(p.project_id);
-                    return { id: p.project_id, stats };
-                } catch {
-                    return { id: p.project_id, stats: null };
-                }
-            });
-            
-            const statsResults = await Promise.all(statsPromises);
-            const statsMap: Record<string, ProjectStats> = {};
-            statsResults.forEach(({ id, stats }) => {
-                if (stats) statsMap[id] = stats;
-            });
-            setProjectStats(statsMap);
-        } catch (error) {
-            console.error('Failed to load projects:', error);
-            toast.error('プロジェクトの読み込みに失敗しました');
-        } finally {
-            setLoading(false);
-        }
-    }
+    const projects = data?.items || [];
 
     const handleSelect = (projectId: string) => {
         const newId = selectedId === projectId ? undefined : projectId;
@@ -59,24 +88,31 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
         e.stopPropagation();
         if (!confirm('このプロジェクトを削除してもよろしいですか？')) return;
         
-        try {
-            await deleteProject(projectId);
-            toast.success('プロジェクトを削除しました');
-            setProjects(prev => prev.filter(p => p.project_id !== projectId));
-            if (selectedId === projectId) {
-                setSelectedId(undefined);
-                onSelectProject(undefined);
+        deleteProjectMutation.mutate(projectId, {
+            onSuccess: () => {
+                if (selectedId === projectId) {
+                    setSelectedId(undefined);
+                    onSelectProject(undefined);
+                }
             }
-        } catch (error) {
-            console.error('Failed to delete project:', error);
-            toast.error('プロジェクトの削除に失敗しました');
-        }
+        });
     };
 
-    if (loading) {
+    if (isLoading) {
         return (
             <div className="glass p-6 rounded-xl flex justify-center">
                 <LoadingSpinner size="medium" />
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="glass p-6 rounded-xl">
+                <div className="text-center py-8">
+                    <div className="text-4xl mb-2">❌</div>
+                    <p className="text-red-400">プロジェクトの読み込みに失敗しました</p>
+                </div>
             </div>
         );
     }
@@ -93,54 +129,15 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
                 />
             </div>
             <div className="space-y-3">
-                {projects.map((p) => {
-                    const stats = projectStats[p.project_id];
-                    return (
-                        <div
-                            key={p.project_id}
-                            onClick={() => handleSelect(p.project_id)}
-                            className={`p-4 rounded-lg cursor-pointer transition-colors border group
-                                ${selectedId === p.project_id 
-                                    ? 'bg-blue-600/20 border-blue-500' 
-                                    : 'bg-white/5 hover:bg-white/10 border-white/10'}`}
-                        >
-                            <div className="flex justify-between items-start">
-                                <div className="flex-1">
-                                    <h3 className="font-semibold text-white">{p.project_name}</h3>
-                                    <p className="text-sm text-gray-400">
-                                        更新: {new Date(p.updated_at).toLocaleDateString('ja-JP')}
-                                    </p>
-                                    
-                                    {/* Project Stats */}
-                                    {stats && (
-                                        <div className="flex flex-wrap gap-2 mt-2">
-                                            <span className="text-xs px-2 py-1 rounded bg-blue-500/20 text-blue-400">
-                                                📋 タスク {stats.incomplete_tasks}
-                                            </span>
-                                            {stats.overdue_tasks > 0 && (
-                                                <span className="text-xs px-2 py-1 rounded bg-red-500/20 text-red-400">
-                                                    🔴 遅延 {stats.overdue_tasks}
-                                                </span>
-                                            )}
-                                            {stats.total_risks > 0 && (
-                                                <span className="text-xs px-2 py-1 rounded bg-yellow-500/20 text-yellow-400">
-                                                    ⚠️ リスク {stats.total_risks}
-                                                </span>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                                <button
-                                    onClick={(e) => handleDelete(e, p.project_id)}
-                                    className="text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    title="プロジェクトを削除"
-                                >
-                                    🗑️
-                                </button>
-                            </div>
-                        </div>
-                    );
-                })}
+                {projects.map((p) => (
+                    <ProjectCard
+                        key={p.project_id}
+                        project={p}
+                        isSelected={selectedId === p.project_id}
+                        onSelect={() => handleSelect(p.project_id)}
+                        onDelete={(e) => handleDelete(e, p.project_id)}
+                    />
+                ))}
                 {projects.length === 0 && (
                     <div className="text-center py-8">
                         <div className="text-4xl mb-2">📁</div>

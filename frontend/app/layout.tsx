@@ -1,22 +1,30 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Outfit, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import ToastContainer from "../components/ToastContainer";
 import ErrorBoundary from "../components/ErrorBoundary";
+import { QueryProvider } from "../lib/query-client";
 
-const inter = Inter({
-  variable: "--font-geist-sans",
+// Outfit: Modern, clean geometric sans-serif with personality
+const outfit = Outfit({
+  variable: "--font-sans",
   subsets: ["latin"],
+  display: "swap",
 });
 
+// JetBrains Mono: Excellent developer font for code/data
 const jetbrainsMono = JetBrains_Mono({
-  variable: "--font-geist-mono",
+  variable: "--font-mono",
   subsets: ["latin"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
   title: "Project Progress DB",
-  description: "Meeting minutes analysis tool",
+  description: "議事録からタスク・リスクを自動抽出するプロジェクト管理ツール",
+  icons: {
+    icon: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({
@@ -25,14 +33,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body
-        className={`${inter.variable} ${jetbrainsMono.variable} antialiased`}
-      >
-        <ErrorBoundary>
-          {children}
-          <ToastContainer />
-        </ErrorBoundary>
+    <html lang="ja" className={`${outfit.variable} ${jetbrainsMono.variable}`}>
+      <body className="font-sans antialiased">
+        <QueryProvider>
+          <ErrorBoundary>
+            {children}
+            <ToastContainer />
+          </ErrorBoundary>
+        </QueryProvider>
       </body>
     </html>
   );

@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import AuthGuard from '../../components/AuthGuard';
+import AppLayout from '../../components/AppLayout';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import { toast } from '../../lib/toast';
-import Link from 'next/link';
 
 interface User {
     user_id: string;
@@ -174,9 +174,9 @@ export default function AdminPage() {
             setNewUser({ email: '', name: '', role: 'member' });
             loadUsers();
             loadAuditLogs();
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error('Failed to create user:', error);
-            toast.error(error.message || '作成に失敗しました');
+            toast.error(error instanceof Error ? error.message : '作成に失敗しました');
         } finally {
             setCreating(false);
         }
@@ -214,9 +214,11 @@ export default function AdminPage() {
     if (loading) {
         return (
             <AuthGuard>
-                <main className="min-h-screen p-8 flex justify-center items-center">
-                    <LoadingSpinner size="large" />
-                </main>
+                <AppLayout>
+                    <div className="flex justify-center items-center min-h-[400px]">
+                        <LoadingSpinner size="large" />
+                    </div>
+                </AppLayout>
             </AuthGuard>
         );
     }
@@ -224,46 +226,32 @@ export default function AdminPage() {
     if (!myRole?.is_admin) {
         return (
             <AuthGuard>
-                <main className="min-h-screen p-8">
-                    <div className="max-w-4xl mx-auto">
-                        <Link
-                            href="/"
-                            className="text-blue-400 hover:text-blue-300 text-sm mb-4 inline-block"
-                        >
-                            ← ダッシュボードに戻る
-                        </Link>
-                        <div className="glass p-8 rounded-xl text-center">
-                            <span className="text-6xl mb-4 block">🔒</span>
-                            <h1 className="text-2xl font-bold text-white mb-2">アクセス拒否</h1>
-                            <p className="text-gray-400">
-                                このページを表示するには管理者権限が必要です。
+                <AppLayout>
+                    <div className="glass p-8 rounded-xl text-center max-w-md mx-auto">
+                        <span className="text-6xl mb-4 block">🔒</span>
+                        <h1 className="text-2xl font-bold text-white mb-2">アクセス拒否</h1>
+                        <p className="text-gray-400">
+                            このページを表示するには管理者権限が必要です。
+                        </p>
+                        <div className="mt-4 p-4 bg-white/5 rounded-lg">
+                            <p className="text-sm text-gray-400">
+                                現在のロール: <span className="text-white">{getRoleLabel(myRole?.role || 'member')}</span>
                             </p>
-                            <div className="mt-4 p-4 bg-white/5 rounded-lg">
-                                <p className="text-sm text-gray-400">
-                                    現在のロール: <span className="text-white">{getRoleLabel(myRole?.role || 'member')}</span>
-                                </p>
-                            </div>
                         </div>
                     </div>
-                </main>
+                </AppLayout>
             </AuthGuard>
         );
     }
 
     return (
         <AuthGuard>
-            <main className="min-h-screen p-8">
-                <div className="max-w-6xl mx-auto space-y-6">
+            <AppLayout>
+                <div className="space-y-6">
                     {/* Header */}
                     <div>
-                        <Link
-                            href="/"
-                            className="text-blue-400 hover:text-blue-300 text-sm mb-2 inline-block"
-                        >
-                            ← ダッシュボードに戻る
-                        </Link>
                         <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-red-400 to-pink-400">
-                            👑 管理者画面
+                            管理者画面
                         </h1>
                         <p className="text-gray-400 mt-1">
                             ユーザー管理と監査ログ
@@ -474,8 +462,7 @@ export default function AdminPage() {
                         </div>
                     )}
                 </div>
-            </main>
+            </AppLayout>
         </AuthGuard>
     );
 }
-

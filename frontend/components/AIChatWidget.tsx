@@ -121,6 +121,7 @@ export default function AIChatWidget() {
             {/* Chat Toggle Button */}
             <button
                 onClick={() => setIsOpen(!isOpen)}
+                data-tour="ai-chat"
                 className={`fixed bottom-6 right-6 w-14 h-14 rounded-full shadow-2xl flex items-center justify-center transition-all z-40 ${
                     isOpen
                         ? 'bg-gray-700 hover:bg-gray-600'

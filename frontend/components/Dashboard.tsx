@@ -4,12 +4,8 @@ import { useState } from 'react';
 import ProjectList from './ProjectList';
 import TaskList from './TaskList';
 import TasksByOwnerView from './TasksByOwnerView';
-import UserMenu from './UserMenu';
 import ExportButton from './ExportButton';
-import GlobalSearch from './GlobalSearch';
 import DashboardCustomizer, { useDashboardSettings } from './DashboardCustomizer';
-import AIChatWidget from './AIChatWidget';
-import Link from 'next/link';
 import { exportProjects, exportTasks } from '../lib/api';
 
 export default function Dashboard() {
@@ -30,83 +26,23 @@ export default function Dashboard() {
     }
 
     return (
-        <div className="space-y-8">
-            {/* Header */}
+        <div className="space-y-6">
+            {/* Page Header */}
             <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-                <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400">
-                    Project Progress DB
-                </h1>
-                <div className="flex flex-wrap items-center gap-3">
-                    {/* Global Search */}
-                    <GlobalSearch />
-                    
-                    {/* Navigation Links */}
-                    <Link
-                        href="/reports"
-                        className="px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-700 text-white font-semibold transition-colors shadow-lg shadow-orange-500/30 text-sm"
-                    >
-                        📊 レポート
-                    </Link>
-                    <Link
-                        href="/meetings"
-                        className="px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-700 text-white font-semibold transition-colors shadow-lg shadow-cyan-500/30 text-sm"
-                    >
-                        📅 会議
-                    </Link>
-                    <Link
-                        href="/decisions"
-                        className="px-3 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-semibold transition-colors shadow-lg shadow-green-500/30 text-sm"
-                    >
-                        ✓ 決定事項
-                    </Link>
-                    <Link
-                        href="/risks"
-                        className="px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold transition-colors shadow-lg shadow-red-500/30 text-sm"
-                    >
-                        ⚠️ リスク
-                    </Link>
-                    <Link
-                        href="/diff"
-                        className="px-3 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-semibold transition-colors shadow-lg shadow-teal-500/30 text-sm"
-                    >
-                        🔄 差分
-                    </Link>
-                    <Link
-                        href="/health"
-                        className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition-colors shadow-lg shadow-emerald-500/30 text-sm"
-                    >
-                        💓 ヘルス
-                    </Link>
-                    <Link
-                        href="/admin"
-                        className="px-3 py-2 rounded-lg bg-pink-600 hover:bg-pink-700 text-white font-semibold transition-colors shadow-lg shadow-pink-500/30 text-sm"
-                    >
-                        👑 管理
-                    </Link>
-                    <Link
-                        href="/settings/integrations"
-                        className="px-3 py-2 rounded-lg bg-gray-600 hover:bg-gray-700 text-white font-semibold transition-colors text-sm"
-                    >
-                        🔗 連携
-                    </Link>
-                    <Link
-                        href="/upload"
-                        className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-colors shadow-lg shadow-blue-500/30 text-sm"
-                    >
-                        📤 アップロード
-                    </Link>
-                    
-                    {/* Settings Button */}
-                    <button
-                        onClick={() => setShowCustomizer(true)}
-                        className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors text-sm"
-                        title="ダッシュボード設定"
-                    >
-                        ⚙️
-                    </button>
-                    
-                    <UserMenu />
+                <div>
+                    <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400">
+                        ダッシュボード
+                    </h1>
+                    <p className="text-gray-400 mt-1">プロジェクトの進捗とタスクを管理</p>
                 </div>
+                <button
+                    onClick={() => setShowCustomizer(true)}
+                    className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors flex items-center gap-2"
+                    title="ダッシュボード設定"
+                >
+                    <span>⚙️</span>
+                    <span className="text-sm">カスタマイズ</span>
+                </button>
             </div>
 
             {/* View Mode Tabs */}
@@ -136,10 +72,10 @@ export default function Dashboard() {
             {/* Dashboard Content */}
             {settings.viewMode === 'list' ? (
                 // List View
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Projects Column */}
                     {isWidgetEnabled('projects') && (
-                        <div className="lg:col-span-1">
+                        <div className="lg:col-span-1" data-tour="projects">
                             <div className="flex justify-between items-center mb-4">
                                 <h2 className="text-xl font-semibold text-white">プロジェクト一覧</h2>
                                 <ExportButton onExport={exportProjects} label="エクスポート" size="small" />
@@ -150,7 +86,7 @@ export default function Dashboard() {
                     
                     {/* Tasks Column */}
                     {isWidgetEnabled('tasks') && (
-                        <div className={isWidgetEnabled('projects') ? 'lg:col-span-2' : 'lg:col-span-3'}>
+                        <div className={isWidgetEnabled('projects') ? 'lg:col-span-2' : 'lg:col-span-3'} data-tour="tasks">
                             <div className="flex justify-between items-center mb-4">
                                 <h2 className="text-xl font-semibold text-white">
                                     タスク {selectedProjectId && '(フィルタ中)'}
@@ -167,7 +103,7 @@ export default function Dashboard() {
                 </div>
             ) : (
                 // By Owner View
-                <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
                     {/* Projects Column */}
                     {isWidgetEnabled('projects') && (
                         <div className="lg:col-span-1">
@@ -205,9 +141,6 @@ export default function Dashboard() {
                 onSetViewMode={setViewMode}
                 onReset={resetToDefaults}
             />
-
-            {/* AI Chat Widget */}
-            <AIChatWidget />
         </div>
     );
 }

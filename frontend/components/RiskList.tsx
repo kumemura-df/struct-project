@@ -1,19 +1,8 @@
 'use client';
 
 import { useMemo } from 'react';
-import { updateRisk, deleteRisk, RiskUpdate } from '../lib/api';
-import { toast } from '../lib/toast';
-
-interface Risk {
-    risk_id: string;
-    risk_description: string;
-    risk_level: 'HIGH' | 'MEDIUM' | 'LOW';
-    project_id?: string;
-    project_name?: string;
-    owner?: string;
-    source_sentence?: string;
-    created_at: string;
-}
+import { useUpdateRisk, useDeleteRisk } from '../lib/hooks';
+import { Risk, RiskUpdate } from '../lib/api';
 
 interface RiskListProps {
     risks: Risk[];
@@ -23,6 +12,9 @@ interface RiskListProps {
 }
 
 export default function RiskList({ risks, search, onRiskDeleted, onRiskUpdated }: RiskListProps) {
+    const updateRiskMutation = useUpdateRisk();
+    const deleteRiskMutation = useDeleteRisk();
+
     const filteredRisks = useMemo(() => {
         if (!search) return risks;
 
@@ -60,40 +52,24 @@ export default function RiskList({ risks, search, onRiskDeleted, onRiskUpdated }
         }
     };
 
-    const getRiskLevelLabel = (level: string) => {
-        switch (level) {
-            case 'HIGH':
-                return '高';
-            case 'MEDIUM':
-                return '中';
-            case 'LOW':
-                return '低';
-            default:
-                return level;
-        }
-    };
-
     const handleRiskLevelChange = async (riskId: string, newLevel: string) => {
-        try {
-            const updated = await updateRisk(riskId, { risk_level: newLevel as RiskUpdate['risk_level'] });
-            toast.success('リスクレベルを更新しました');
-            onRiskUpdated?.(updated as Risk);
-        } catch (error) {
-            console.error('Failed to update risk:', error);
-            toast.error('リスクレベルの更新に失敗しました');
-        }
+        updateRiskMutation.mutate(
+            { riskId, updates: { risk_level: newLevel as RiskUpdate['risk_level'] } },
+            {
+                onSuccess: (data) => {
+                    onRiskUpdated?.(data as Risk);
+                }
+            }
+        );
     };
 
     const handleDelete = async (riskId: string) => {
         if (!confirm('このリスクを削除してもよろしいですか？')) return;
-        try {
-            await deleteRisk(riskId);
-            toast.success('リスクを削除しました');
-            onRiskDeleted?.(riskId);
-        } catch (error) {
-            console.error('Failed to delete risk:', error);
-            toast.error('リスクの削除に失敗しました');
-        }
+        deleteRiskMutation.mutate(riskId, {
+            onSuccess: () => {
+                onRiskDeleted?.(riskId);
+            }
+        });
     };
 
     if (filteredRisks.length === 0) {
@@ -115,7 +91,8 @@ export default function RiskList({ risks, search, onRiskDeleted, onRiskUpdated }
                             <select
                                 value={risk.risk_level}
                                 onChange={(e) => handleRiskLevelChange(risk.risk_id, e.target.value)}
-                                className={`px-3 py-1 rounded-full text-xs font-semibold border bg-transparent cursor-pointer ${getRiskLevelColor(risk.risk_level)}`}
+                                disabled={updateRiskMutation.isPending}
+                                className={`px-3 py-1 rounded-full text-xs font-semibold border bg-transparent cursor-pointer ${getRiskLevelColor(risk.risk_level)} disabled:opacity-50`}
                             >
                                 <option value="HIGH">高</option>
                                 <option value="MEDIUM">中</option>
@@ -133,7 +110,8 @@ export default function RiskList({ risks, search, onRiskDeleted, onRiskUpdated }
                             )}
                             <button
                                 onClick={() => handleDelete(risk.risk_id)}
-                                className="text-red-400 hover:text-red-300 transition-colors opacity-0 group-hover:opacity-100"
+                                disabled={deleteRiskMutation.isPending}
+                                className="text-red-400 hover:text-red-300 transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50"
                                 title="リスクを削除"
                             >
                                 🗑️

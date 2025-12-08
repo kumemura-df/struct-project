@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import AuthGuard from '../../components/AuthGuard';
+import AppLayout from '../../components/AppLayout';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import { toast } from '../../lib/toast';
-import Link from 'next/link';
 
 interface WeeklySummary {
     week_start: string;
@@ -124,20 +124,15 @@ export default function ReportsPage() {
 
     return (
         <AuthGuard>
-            <main className="min-h-screen p-8">
-                <div className="max-w-6xl mx-auto space-y-8">
+            <AppLayout>
+                <div className="space-y-6">
                     {/* Header */}
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                         <div>
-                            <Link
-                                href="/"
-                                className="text-blue-400 hover:text-blue-300 text-sm mb-2 inline-block"
-                            >
-                                ← ダッシュボードに戻る
-                            </Link>
                             <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-pink-400">
-                                📊 週次レポート
+                                週次レポート
                             </h1>
+                            <p className="text-gray-400 mt-1">プロジェクト進捗の週次サマリー</p>
                         </div>
                         <div className="flex items-center gap-2">
                             <button
@@ -209,7 +204,7 @@ export default function ReportsPage() {
                             )}
 
                             {/* Main Content Grid */}
-                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                 {/* Overdue Tasks */}
                                 <div className="glass p-6 rounded-xl">
                                     <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
@@ -348,8 +343,7 @@ export default function ReportsPage() {
                         </>
                     )}
                 </div>
-            </main>
+            </AppLayout>
         </AuthGuard>
     );
 }
-
