@@ -181,8 +181,8 @@ GET  /ai/analysis/bottleneck       # ボトルネック分析
 | 5.1 | **Google Drive連携** | ドライブから議事録をインポート | ✅ 完了 |
 | 5.2 | **Google Docs連携** | Docsから直接テキスト取得 | ✅ 完了 |
 | 5.3 | **Google Calendar連携** | 会議情報の自動取得 | ✅ 完了 |
-| 5.4 | **Google Meet文字起こし** | Meet録画の文字起こし取り込み | 🔄 検討中 |
-| 5.5 | **Zoom連携** | Zoom文字起こし取り込み | 🔄 検討中 |
+| 5.4 | **文字起こしファイル連携** | VTT/SRT/Otter.ai/tl;dvファイル取り込み | ✅ 完了 |
+| 5.5 | **Zoom文字起こし連携** | Zoomの文字起こしTXTファイル取り込み | ✅ 完了 |
 | 5.6 | **Slack通知** | 高リスク・遅延タスク通知 | ✅ 完了 |
 | 5.7 | **Teams通知** | Teams向け通知 | 🔄 検討中 |
 
@@ -195,13 +195,26 @@ backend/api/
 │   ├── google_docs.py
 │   ├── google_calendar.py
 │   └── slack.py
+├── services/
+│   └── transcript_parser.py       # 文字起こしファイルパーサー
 └── routers/
-    └── integrations.py            # 連携設定API
+    ├── integrations.py            # 連携設定API
+    └── upload.py                  # 拡張: VTT/SRT/Otter対応
 
 frontend/app/
 └── settings/
     └── page.tsx                   # 設定画面（連携設定含む）
 ```
+
+**対応文字起こし形式**:
+
+| 形式 | 拡張子 | ソース |
+|------|--------|--------|
+| WebVTT | .vtt | Zoom, YouTube, Google Meet |
+| SubRip | .srt | 標準字幕形式 |
+| Otter.ai | .txt | Otter.aiエクスポート |
+| tl;dv | .txt, .md | tl;dvエクスポート |
+| Zoom TXT | .txt | Zoom文字起こし |
 
 ---
 
