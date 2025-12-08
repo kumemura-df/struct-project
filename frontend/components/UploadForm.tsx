@@ -8,6 +8,15 @@ import { useRouter } from 'next/navigation';
 
 type InputMode = 'file' | 'text';
 
+// Supported transcript sources
+const TRANSCRIPT_SOURCES = [
+    { id: 'auto', name: '自動検出', description: '形式を自動判別' },
+    { id: 'otter', name: 'Otter.ai', description: 'Otter.aiからのエクスポート' },
+    { id: 'tldv', name: 'tl;dv', description: 'tl;dvからのエクスポート' },
+    { id: 'zoom', name: 'Zoom', description: 'Zoomの文字起こし' },
+    { id: 'plain', name: 'プレーンテキスト', description: '通常のテキスト' },
+];
+
 export default function UploadForm() {
     const router = useRouter();
     const [inputMode, setInputMode] = useState<InputMode>('text');
@@ -16,6 +25,7 @@ export default function UploadForm() {
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     const [title, setTitle] = useState('');
     const [uploading, setUploading] = useState(false);
+    const [sourceType, setSourceType] = useState('auto');
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -25,17 +35,26 @@ export default function UploadForm() {
 
         setUploading(true);
         try {
+            let result;
             if (inputMode === 'file' && file) {
-                await uploadFile(file, date, title);
+                result = await uploadFile(file, date, title, sourceType);
             } else if (inputMode === 'text') {
-                await uploadText(text, date, title);
+                result = await uploadText(text, date, title, sourceType);
             }
-            toast.success('アップロード成功！処理を開始しました。');
+            
+            // Show success message with transcript info
+            if (result?.transcript_format) {
+                const formatName = TRANSCRIPT_SOURCES.find(s => s.id === result.transcript_format)?.name || result.transcript_format;
+                toast.success(`アップロード成功！形式: ${formatName}`);
+            } else {
+                toast.success('アップロード成功！処理を開始しました。');
+            }
 
             // Reset form
             setFile(null);
             setText('');
             setTitle('');
+            setSourceType('auto');
             const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
             if (fileInput) fileInput.value = '';
 
@@ -106,6 +125,30 @@ export default function UploadForm() {
                 </div>
 
                 {/* Conditional Input based on mode */}
+                {/* Source Type Selection */}
+                <div>
+                    <label className="block text-sm font-medium text-gray-200 mb-2">
+                        文字起こしソース
+                    </label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {TRANSCRIPT_SOURCES.map((source) => (
+                            <button
+                                key={source.id}
+                                type="button"
+                                onClick={() => setSourceType(source.id)}
+                                className={`p-3 rounded-lg text-left transition-all ${
+                                    sourceType === source.id
+                                        ? 'bg-blue-600/30 border-2 border-blue-500'
+                                        : 'bg-white/5 border border-white/10 hover:bg-white/10'
+                                }`}
+                            >
+                                <div className="text-sm font-medium text-white">{source.name}</div>
+                                <div className="text-xs text-gray-400 mt-0.5">{source.description}</div>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
                 {inputMode === 'text' ? (
                     <div>
                         <label className="block text-sm font-medium text-gray-200 mb-2">
@@ -114,19 +157,26 @@ export default function UploadForm() {
                         <textarea
                             value={text}
                             onChange={(e) => setText(e.target.value)}
-                            className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                            placeholder="議事録の内容を入力またはペーストしてください..."
+                            className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none font-mono text-sm"
+                            placeholder={`文字起こしテキストをペーストしてください...
+
+例（Otter.ai形式）:
+田中  0:00
+本日はプロジェクトの進捗確認を行います。
+
+鈴木  0:15
+はい、現在のステータスを報告します。`}
                             rows={12}
                             required
                         />
                         <p className="mt-2 text-sm text-gray-400">
-                            {text.length > 0 ? `${text.length} 文字` : '直接入力またはコピー＆ペーストできます'}
+                            {text.length > 0 ? `${text.length} 文字` : 'Otter.ai, tl;dv, Zoomなどの文字起こしテキストをペーストできます'}
                         </p>
                     </div>
                 ) : (
                     <div>
                         <label className="block text-sm font-medium text-gray-200 mb-2">
-                            ファイル (.txt または .md)
+                            ファイル (.txt, .md, .vtt, .srt)
                         </label>
                         <input
                             type="file"
@@ -137,7 +187,7 @@ export default function UploadForm() {
                                 file:text-sm file:font-semibold
                                 file:bg-blue-600 file:text-white
                                 hover:file:bg-blue-700 file:cursor-pointer"
-                            accept=".txt,.md"
+                            accept=".txt,.md,.vtt,.srt"
                             required={inputMode === 'file'}
                         />
                         {file && (
@@ -145,6 +195,16 @@ export default function UploadForm() {
                                 選択中: {file.name} ({(file.size / 1024).toFixed(2)} KB)
                             </p>
                         )}
+                        <div className="mt-3 p-3 bg-white/5 rounded-lg">
+                            <p className="text-xs text-gray-400">
+                                <strong className="text-gray-300">対応形式:</strong>
+                            </p>
+                            <ul className="mt-1 text-xs text-gray-400 space-y-0.5">
+                                <li>• <strong>.vtt</strong> - Zoom, YouTube, Google Meet字幕</li>
+                                <li>• <strong>.srt</strong> - 標準字幕形式</li>
+                                <li>• <strong>.txt</strong> - Otter.ai, tl;dv, Zoom出力</li>
+                            </ul>
+                        </div>
                     </div>
                 )}
 

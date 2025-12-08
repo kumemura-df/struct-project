@@ -153,10 +153,31 @@ async function authenticatedFetch(url: string, options: RequestInit = {}) {
   }
 }
 
-export async function uploadFile(file: File, date: string, title?: string) {
+export interface UploadResponse {
+  meeting_id: string;
+  status: 'PENDING' | 'DONE' | 'ERROR';
+  message?: string;
+  message_id?: string;
+  transcript_format?: string;
+  transcript_segments?: number;
+  extracted?: {
+    projects: number;
+    tasks: number;
+    risks: number;
+    decisions: number;
+  };
+}
+
+export async function uploadFile(
+  file: File, 
+  date: string, 
+  title?: string,
+  sourceType: string = 'auto'
+): Promise<UploadResponse> {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('meeting_date', date);
+  formData.append('source_type', sourceType);
   if (title) formData.append('title', title);
 
   const res = await authenticatedFetch(`${API_URL}/upload/`, {
@@ -168,10 +189,16 @@ export async function uploadFile(file: File, date: string, title?: string) {
   return res.json();
 }
 
-export async function uploadText(text: string, date: string, title?: string) {
+export async function uploadText(
+  text: string, 
+  date: string, 
+  title?: string,
+  sourceType: string = 'auto'
+): Promise<UploadResponse> {
   const formData = new FormData();
   formData.append('text', text);
   formData.append('meeting_date', date);
+  formData.append('source_type', sourceType);
   if (title) formData.append('title', title);
 
   const res = await authenticatedFetch(`${API_URL}/upload/text`, {
@@ -180,6 +207,20 @@ export async function uploadText(text: string, date: string, title?: string) {
     headers: {}, // Remove Content-Type for FormData
   });
 
+  return res.json();
+}
+
+export async function getUploadFormats(): Promise<{
+  formats: Array<{
+    format: string;
+    name: string;
+    extensions: string[];
+    description: string;
+    example_source: string;
+  }>;
+  supported_extensions: string[];
+}> {
+  const res = await authenticatedFetch(`${API_URL}/upload/formats`);
   return res.json();
 }
 
