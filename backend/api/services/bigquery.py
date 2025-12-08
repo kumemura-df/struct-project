@@ -111,9 +111,14 @@ def _get_latest_risk_levels(risk_ids: List[str]) -> Dict[str, str]:
         ]
     )
     try:
-        rows = client.query(query, job_config=job_config)
+        rows = list(client.query(query, job_config=job_config))
     except NotFound:
         return {}
+    except Exception as e:
+        # Table may not exist or other query error - return empty to allow list_risks to proceed
+        if "not found" in str(e).lower() or "does not exist" in str(e).lower():
+            return {}
+        raise
     latest: Dict[str, str] = {}
     for row in rows:
         rid = row.risk_id

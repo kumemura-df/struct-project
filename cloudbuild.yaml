@@ -71,7 +71,7 @@ steps:
           --platform=managed \
           --allow-unauthenticated \
           --service-account=${_API_SA_EMAIL} \
-          --set-env-vars=PROJECT_ID=${PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},PUBSUB_TOPIC=${_PUBSUB_TOPIC},ENVIRONMENT=${_ENVIRONMENT},FRONTEND_URL=${_FRONTEND_URL},ALLOWED_OAUTH_DOMAINS=${_ALLOWED_OAUTH_DOMAINS},GCS_BUCKET=${PROJECT_ID}-meeting-notes-raw \
+          --set-env-vars=PROJECT_ID=${PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},PUBSUB_TOPIC=${_PUBSUB_TOPIC},ENVIRONMENT=${_ENVIRONMENT},FRONTEND_URL=${_FRONTEND_URL},ALLOWED_OAUTH_DOMAINS=${_ALLOWED_OAUTH_DOMAINS},GCS_BUCKET=${PROJECT_ID}-meeting-notes-raw,REGION=${_REGION},GEMINI_MODEL=${_GEMINI_MODEL} \
           --set-secrets=OAUTH_CLIENT_ID=oauth-client-id:latest,OAUTH_CLIENT_SECRET=oauth-client-secret:latest,JWT_SECRET_KEY=jwt-secret-key:latest
     waitFor: ['push-api']
 
